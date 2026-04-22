@@ -92,6 +92,86 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def build_auth_providers(config: Settings, logger: Any) -> list:
+    """Build the ordered list of authentication providers from configuration.
+
+    Factored out of ``create_application`` so the auth-bootstrap rules can
+    be exercised by tests in isolation — this is the most safety-critical
+    piece of bot startup.
+
+    Rules:
+
+    1. If ``ALLOWED_USERS`` is non-empty, a ``WhitelistAuthProvider`` is
+       added first.
+    2. If ``ENABLE_TOKEN_AUTH`` is true, a ``TokenAuthProvider`` is added.
+    3. Fall-through — when no providers have been configured yet:
+
+       * With ``DEVELOPMENT_MODE=true`` **and** ``ALLOW_ALL_DEV_USERS=true``,
+         an allow-all-dev whitelist provider is installed and a
+         ``critical`` warning is logged. This path accepts commands from
+         any Telegram user on earth and is intended for local development
+         only.
+       * With ``DEVELOPMENT_MODE=true`` but no ``ALLOW_ALL_DEV_USERS``
+         opt-in, the bot refuses to start. This closes the historical
+         footgun where an operator who shipped ``.env.example`` verbatim
+         got an open-to-the-world RCE bot.
+       * Otherwise, the bot refuses to start — a production deploy with no
+         authentication configured is never desired.
+
+    Raises:
+        ConfigurationError: when the combination above is unsafe.
+    """
+    providers: list = []
+
+    # Add whitelist provider if users are configured
+    if config.allowed_users:
+        providers.append(WhitelistAuthProvider(config.allowed_users))
+
+    # Add token provider if enabled
+    if config.enable_token_auth:
+        token_storage = InMemoryTokenStorage()  # TODO: Use database storage
+        providers.append(TokenAuthProvider(config.auth_token_secret, token_storage))
+
+    if providers:
+        return providers
+
+    # No real provider configured — decide what to do.
+    #
+    # This path is a CRITICAL footgun. Historically, with an empty
+    # ALLOWED_USERS list and DEVELOPMENT_MODE=true, the bot silently
+    # installed a whitelist provider accepting every Telegram user on
+    # earth — granting RCE over Telegram via Claude's Bash tool. The
+    # shipped .env.example defaulted DEVELOPMENT_MODE=true, so a careless
+    # operator who forgot to set ALLOWED_USERS got an open-to-the-world
+    # bot.
+    #
+    # We now require a SECOND explicit opt-in (ALLOW_ALL_DEV_USERS=true).
+    # Without it, the bot refuses to start in that configuration.
+    if config.development_mode:
+        if not config.allow_all_dev_users:
+            raise ConfigurationError(
+                "Refusing to start: ALLOWED_USERS is empty and "
+                "DEVELOPMENT_MODE=true, but ALLOW_ALL_DEV_USERS is not set "
+                "to true. This configuration would accept commands from "
+                "ANY Telegram user on earth (remote code execution). "
+                "Either:\n"
+                "  - add user IDs to ALLOWED_USERS (recommended), or\n"
+                "  - explicitly opt in with ALLOW_ALL_DEV_USERS=true "
+                "(dangerous, dev-only)."
+            )
+        logger.critical(
+            "SECURITY WARNING: allow_all_dev enabled - "
+            "ANY Telegram user can execute commands on this host via "
+            "Claude. Do NOT run in production. Remove "
+            "ALLOW_ALL_DEV_USERS=true and set ALLOWED_USERS to a concrete "
+            "whitelist to close this."
+        )
+        providers.append(WhitelistAuthProvider([], allow_all_dev=True))
+        return providers
+
+    raise ConfigurationError("No authentication providers configured")
+
+
 async def create_application(config: Settings) -> Dict[str, Any]:
     """Create and configure the application components."""
     logger = structlog.get_logger()
@@ -104,26 +184,7 @@ async def create_application(config: Settings) -> Dict[str, Any]:
     await storage.initialize()
 
     # Create security components
-    providers = []
-
-    # Add whitelist provider if users are configured
-    if config.allowed_users:
-        providers.append(WhitelistAuthProvider(config.allowed_users))
-
-    # Add token provider if enabled
-    if config.enable_token_auth:
-        token_storage = InMemoryTokenStorage()  # TODO: Use database storage
-        providers.append(TokenAuthProvider(config.auth_token_secret, token_storage))
-
-    # Fall back to allowing all users in development mode
-    if not providers and config.development_mode:
-        logger.warning(
-            "No auth providers configured"
-            " - creating development-only allow-all provider"
-        )
-        providers.append(WhitelistAuthProvider([], allow_all_dev=True))
-    elif not providers:
-        raise ConfigurationError("No authentication providers configured")
+    providers = build_auth_providers(config, logger)
 
     auth_manager = AuthenticationManager(providers)
     security_validator = SecurityValidator(
