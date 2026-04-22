@@ -864,7 +864,7 @@ See R1 + R2 fixes first — they give meaningful single-host headroom.
 | # | Finding | File | Effort | Status |
 |---|---------|------|--------|--------|
 | 1 | C1 — middleware on callbacks | `src/bot/core.py:127-148` | S | ✅ done (PR #2) |
-| 2 | C2 — `.env.example` defaults | `.env.example:209` + `main.py:118-124` | S | ⏳ |
+| 2 | C2 — `.env.example` defaults | `.env.example:209` + `main.py:118-124` | S | ✅ done (PR #3) |
 | 3 | C3 — audit/tokens → SQLite | `src/main.py:115, 136` | S | ⏳ |
 | 4 | R1 — per-user lock | `src/bot/update_processor.py:38` | S (~30 LOC) | ⏳ |
 | 5 | R2 — WAL + busy_timeout + transactional facade | `src/storage/database.py`, `src/storage/facade.py` | S+M | ⏳ |

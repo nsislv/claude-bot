@@ -289,6 +289,17 @@ class Settings(BaseSettings):
     # Development
     debug: bool = Field(False, description="Enable debug mode")
     development_mode: bool = Field(False, description="Enable development features")
+    allow_all_dev_users: bool = Field(
+        False,
+        description=(
+            "DANGEROUS: explicit second opt-in required for the allow-all-dev "
+            "auth fallback. When DEVELOPMENT_MODE=true AND no ALLOWED_USERS "
+            "are configured, the bot refuses to start unless this is also "
+            "set to true — preventing an accidental open-to-the-world RCE "
+            "deployment (any Telegram user could send shell commands via "
+            "Claude). Must be explicitly combined with DEVELOPMENT_MODE=true."
+        ),
+    )
 
     # Webhook settings (optional)
     webhook_url: Optional[str] = Field(None, description="Webhook URL for bot")
