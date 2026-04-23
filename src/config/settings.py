@@ -322,6 +322,21 @@ class Settings(BaseSettings):
     # Agentic platform settings
     enable_api_server: bool = Field(False, description="Enable FastAPI webhook server")
     api_server_port: int = Field(8080, description="Webhook API server port")
+    # M4 — default to loopback. Pre-fix the API server bound
+    # ``0.0.0.0`` unconditionally, so on any host without a firewall
+    # the /docs route (enabled whenever ``DEVELOPMENT_MODE=true``, the
+    # shipped ``.env.example`` default pre-C2) was internet-reachable.
+    # Operators who deliberately want the server exposed can set
+    # ``API_SERVER_HOST=0.0.0.0`` and put a reverse proxy in front.
+    api_server_host: str = Field(
+        "127.0.0.1",
+        description=(
+            "Interface the webhook API server binds to. Defaults to "
+            "loopback so a misconfigured host does not expose "
+            "/docs or /webhooks/* to the internet; override to "
+            "0.0.0.0 behind a reverse proxy / TLS-terminating LB."
+        ),
+    )
     enable_scheduler: bool = Field(False, description="Enable job scheduler")
     github_webhook_secret: Optional[str] = Field(
         None, description="GitHub webhook HMAC secret"
