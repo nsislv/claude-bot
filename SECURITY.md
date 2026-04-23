@@ -176,9 +176,17 @@ ENVIRONMENT=production  # Enables strict security defaults
 
 **Do not create public GitHub issues for security vulnerabilities.**
 
-For security issues, please email: [Insert security contact email]
+Please report privately via **GitHub's private vulnerability reporting**:
+<https://github.com/richardatk01/claude-code-telegram/security/advisories/new>
 
-Include: description, steps to reproduce, potential impact, and suggested mitigation.
+If GitHub private reporting is unavailable, email the maintainer listed
+in `pyproject.toml` (`richardatk01@gmail.com`) with subject line prefix
+**[security]**.
+
+Include: description, steps to reproduce, potential impact, affected
+versions / commit SHA, and suggested mitigation if known. Please do not
+share proof-of-concept exploits in plaintext email — ask for a secure
+channel first.
 
 ### Response Process
 
