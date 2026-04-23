@@ -21,6 +21,7 @@ from .models import (
     SessionModel,
     ToolUsageModel,
     UserModel,
+    UserTokenModel,
 )
 
 logger = structlog.get_logger()
@@ -607,6 +608,160 @@ class AuditLogRepository:
             )
             rows = await cursor.fetchall()
             return [AuditLogModel.from_row(row) for row in rows]
+
+    async def query(
+        self,
+        user_id: Optional[int] = None,
+        event_type: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> List[AuditLogModel]:
+        """Filtered query over the audit log.
+
+        Powers :class:`src.security.audit.SQLiteAuditStorage.get_events` —
+        returns rows newest-first, all filters are optional, and
+        ``limit`` is always applied.
+        """
+        clauses: List[str] = []
+        params: List = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        if event_type is not None:
+            clauses.append("event_type = ?")
+            params.append(event_type)
+        if start_time is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start_time)
+        if end_time is not None:
+            clauses.append("timestamp <= ?")
+            params.append(end_time)
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = (
+            f"SELECT * FROM audit_log {where} "
+            "ORDER BY timestamp DESC, id DESC LIMIT ?"
+        )
+        params.append(limit)
+
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(sql, tuple(params))
+            rows = await cursor.fetchall()
+            return [AuditLogModel.from_row(row) for row in rows]
+
+
+class UserTokenRepository:
+    """User-token data access for the ``user_tokens`` table.
+
+    Used by :class:`src.security.auth.SQLiteTokenStorage`. Tokens are
+    modelled per-user (one active row per user_id), mirroring the
+    legacy in-memory implementation: a new token for an existing user
+    deactivates any prior row before inserting.
+    """
+
+    def __init__(self, db_manager: DatabaseManager):
+        """Initialize repository."""
+        self.db = db_manager
+
+    async def upsert_active(self, token: UserTokenModel) -> int:
+        """Atomically deactivate any prior token and insert a new one.
+
+        Wrapped in ``BEGIN IMMEDIATE`` so concurrent calls for the
+        same ``user_id`` serialise on SQLite's reserved write lock:
+        without it, two concurrent ``store_token`` calls could each
+        run their UPDATE + INSERT, leaving two ``is_active=1`` rows
+        and violating the "one active token per user" invariant.
+        Review feedback on PR #8.
+
+        Returns the ``token_id`` of the newly inserted row.
+        """
+        async with self.db.get_connection() as conn:
+            # ``BEGIN IMMEDIATE`` takes the reserved write lock
+            # up-front, so the busy_timeout (R2) kicks in cleanly
+            # on contention instead of late-mid-transaction.
+            # ``commit()`` first to flush any pending implicit
+            # transaction aiosqlite may have opened; without this,
+            # explicit ``BEGIN IMMEDIATE`` raises "cannot start a
+            # transaction within a transaction" on a recycled
+            # connection.
+            await conn.commit()
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                await conn.execute(
+                    "UPDATE user_tokens SET is_active = 0 WHERE user_id = ?",
+                    (token.user_id,),
+                )
+                cursor = await conn.execute(
+                    """
+                    INSERT INTO user_tokens
+                    (user_id, token_hash, created_at, expires_at,
+                     last_used, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        token.user_id,
+                        token.token_hash,
+                        token.created_at,
+                        token.expires_at,
+                        token.last_used,
+                        token.is_active,
+                    ),
+                )
+                await conn.commit()
+                return cursor.lastrowid
+            except Exception:
+                await conn.rollback()
+                raise
+
+    async def get_active_for_user(self, user_id: int) -> Optional[UserTokenModel]:
+        """Return the user's active token, or None if none / expired.
+
+        Expired tokens are eagerly deactivated here so callers always get
+        an accurate active-token picture without a separate reaper.
+        """
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT * FROM user_tokens
+                WHERE user_id = ? AND is_active = 1
+                ORDER BY token_id DESC
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+
+            token = UserTokenModel.from_row(row)
+            if token.is_expired():
+                # Eagerly deactivate — next call returns None cleanly.
+                await conn.execute(
+                    "UPDATE user_tokens SET is_active = 0 WHERE token_id = ?",
+                    (token.token_id,),
+                )
+                await conn.commit()
+                return None
+            return token
+
+    async def revoke(self, user_id: int) -> None:
+        """Deactivate every token for a user."""
+        async with self.db.get_connection() as conn:
+            await conn.execute(
+                "UPDATE user_tokens SET is_active = 0 WHERE user_id = ?",
+                (user_id,),
+            )
+            await conn.commit()
+
+    async def touch_last_used(self, token_id: int) -> None:
+        """Update the ``last_used`` timestamp for an active token."""
+        async with self.db.get_connection() as conn:
+            await conn.execute(
+                "UPDATE user_tokens SET last_used = ? WHERE token_id = ?",
+                (datetime.now(UTC), token_id),
+            )
+            await conn.commit()
 
 
 class CostTrackingRepository:
