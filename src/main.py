@@ -489,10 +489,32 @@ async def run_application(app: Dict[str, Any]) -> None:
         logger.error("Application error", error=str(e))
         raise
     finally:
-        # Ordered shutdown: scheduler -> API -> notification -> bot -> claude -> storage
+        # Ordered shutdown:
+        #   0. Signal every in-flight request to interrupt (R4) so
+        #      orphaned Claude subprocesses get a chance to exit
+        #      cleanly instead of leaving their Stop buttons pointing
+        #      at a dead process.
+        #   1. scheduler -> API -> notification -> bot -> claude -> storage
         logger.info("Shutting down application")
 
         try:
+            # Step 0 — interrupt any active Claude runs. Do this
+            # BEFORE we stop the bot so handlers can still post the
+            # "interrupted" reply text through PTB.
+            try:
+                interrupted = bot.orchestrator.interrupt_all_active_requests()
+                if interrupted:
+                    # Small grace period so the interrupt watcher
+                    # inside the SDK has time to call
+                    # ``client.interrupt()`` and the handler can
+                    # finish its cleanup block.
+                    await asyncio.sleep(0.5)
+            except Exception as interrupt_err:
+                logger.warning(
+                    "Failed to interrupt active requests cleanly",
+                    error=str(interrupt_err),
+                )
+
             if scheduler:
                 await scheduler.stop()
             if notification_service:

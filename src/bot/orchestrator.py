@@ -99,6 +99,37 @@ class MessageOrchestrator:
         self._active_requests: Dict[int, ActiveRequest] = {}
         self._known_commands: frozenset[str] = frozenset()
 
+    def interrupt_all_active_requests(self) -> int:
+        """Signal every in-flight Claude request to stop (R4).
+
+        The per-request ``asyncio.Event`` is wired into
+        ``execute_command`` via a watcher task that calls
+        ``client.interrupt()`` on the Claude SDK when the event is
+        set — so simply setting the event here triggers a clean
+        user-facing "interrupted by shutdown" exit on the next
+        turn boundary without needing shared state across the
+        shutdown path.
+
+        Called from ``main.py`` during graceful shutdown **before**
+        we stop the PTB ``Application`` — giving in-flight handlers
+        a chance to wind down instead of leaving orphaned Claude
+        subprocesses whose Stop buttons point at a dead process.
+
+        Returns the number of active requests that were signalled.
+        """
+        signalled = 0
+        for req in list(self._active_requests.values()):
+            if not req.interrupt_event.is_set():
+                req.interrupt_event.set()
+                req.interrupted = True
+                signalled += 1
+        if signalled:
+            logger.info(
+                "Signalled in-flight requests to interrupt on shutdown",
+                count=signalled,
+            )
+        return signalled
+
     def _inject_deps(self, handler: Callable) -> Callable:  # type: ignore[type-arg]
         """Wrap handler to inject dependencies into context.bot_data."""
 

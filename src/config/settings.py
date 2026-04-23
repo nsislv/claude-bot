@@ -191,6 +191,20 @@ class Settings(BaseSettings):
     database_url: str = Field(
         DEFAULT_DATABASE_URL, description="Database connection URL"
     )
+    # R4 — optional PTB PicklePersistence path. When set, PTB saves
+    # ``context.user_data`` / ``context.chat_data`` / ``context.bot_data``
+    # to disk between restarts so per-user state (current directory,
+    # Claude session id, verbose level, thread mapping) survives a
+    # process bounce. Leave unset to keep the legacy in-memory
+    # behaviour (default).
+    ptb_persistence_path: Optional[Path] = Field(
+        None,
+        description=(
+            "Path to a PicklePersistence file that preserves PTB "
+            "user_data/chat_data/bot_data across restarts. Unset "
+            "disables persistence (legacy behaviour)."
+        ),
+    )
     session_timeout_hours: int = Field(
         DEFAULT_SESSION_TIMEOUT_HOURS, description="Session timeout"
     )
