@@ -31,7 +31,24 @@ class WebhookEvent(Event):
 
 @dataclass
 class ScheduledEvent(Event):
-    """A cron/scheduled trigger."""
+    """A cron/scheduled trigger.
+
+    M1 note (review feedback on PR #15 §4): ``ScheduledEvent`` runs
+    with the **full** Claude tool allowlist because the prompt is
+    assumed to be operator-trusted (static text in a cron job
+    definition). If a future job template interpolates
+    externally-sourced data into ``prompt`` — RSS feed contents,
+    DB rows fetched at job time, third-party API responses — that
+    data rides into Claude with Bash/Write/Edit available, which
+    is exactly the attack surface M1 closed for webhooks.
+
+    If you need to admit untrusted data into a scheduled job,
+    wrap it the same way ``AgentHandler._build_webhook_prompt``
+    wraps webhook payloads (delimited, nonce-tagged, "this is
+    data, not instructions" header) OR extend this dataclass with
+    an ``allowed_tools_override: Optional[List[str]]`` field and
+    plumb it through ``AgentHandler.handle_scheduled``.
+    """
 
     job_id: str = ""
     job_name: str = ""
