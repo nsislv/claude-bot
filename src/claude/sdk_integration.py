@@ -32,6 +32,7 @@ from claude_agent_sdk.types import StreamEvent
 
 from ..config.settings import Settings
 from ..security.validators import SecurityValidator
+from ..utils.redaction import redact_secrets
 from .exceptions import (
     ClaudeMCPError,
     ClaudeParsingError,
@@ -289,12 +290,19 @@ class ClaudeSDKManager:
         )
 
         try:
-            # Capture stderr from Claude CLI for better error diagnostics
+            # Capture stderr from Claude CLI for better error diagnostics.
+            # M5: run every captured line through ``redact_secrets``
+            # *before* it reaches the logger or gets folded into the
+            # ``stderr_lines`` buffer. A subprocess that accidentally
+            # prints an API key to stderr would otherwise land raw in
+            # the structured log pipeline and any error message built
+            # from ``stderr_lines`` downstream.
             stderr_lines: List[str] = []
 
             def _stderr_callback(line: str) -> None:
-                stderr_lines.append(line)
-                logger.debug("Claude CLI stderr", line=line)
+                redacted = redact_secrets(line)
+                stderr_lines.append(redacted)
+                logger.debug("Claude CLI stderr", line=redacted)
 
             # Build system prompt, loading CLAUDE.md from working directory if present
             base_prompt = (
@@ -629,8 +637,13 @@ class ClaudeSDKManager:
             raise ClaudeProcessError(error_msg)
 
         except ProcessError as e:
-            error_str = str(e)
-            # Include captured stderr for better diagnostics
+            # M5: ``str(e)`` can contain the subprocess argv /
+            # environment slice that the SDK assembled, which may
+            # include credentials. Run it through ``redact_secrets``
+            # before it ever reaches a log line or an exception
+            # message bubbling up to the user.
+            error_str = redact_secrets(str(e))
+            # ``stderr_lines`` was already redacted at the callback.
             captured_stderr = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
             if captured_stderr:
                 error_str = f"{error_str}\nStderr: {captured_stderr}"
@@ -646,7 +659,10 @@ class ClaudeSDKManager:
             raise ClaudeProcessError(f"Claude process error: {error_str}")
 
         except CLIConnectionError as e:
-            error_str = str(e)
+            # M5: connection errors can include URIs like
+            # ``https://user:password@host/path`` that the underlying
+            # SDK failed to resolve; redact before logging.
+            error_str = redact_secrets(str(e))
             logger.error("Claude connection error", error=error_str)
             # Check if the connection error is MCP-related
             if "mcp" in error_str.lower() or "server" in error_str.lower():
@@ -654,12 +670,14 @@ class ClaudeSDKManager:
             raise ClaudeProcessError(f"Failed to connect to Claude: {error_str}")
 
         except CLIJSONDecodeError as e:
-            logger.error("Claude SDK JSON decode error", error=str(e))
-            raise ClaudeParsingError(f"Failed to decode Claude response: {str(e)}")
+            error_str = redact_secrets(str(e))
+            logger.error("Claude SDK JSON decode error", error=error_str)
+            raise ClaudeParsingError(f"Failed to decode Claude response: {error_str}")
 
         except ClaudeSDKError as e:
-            logger.error("Claude SDK error", error=str(e))
-            raise ClaudeProcessError(f"Claude SDK error: {str(e)}")
+            error_str = redact_secrets(str(e))
+            logger.error("Claude SDK error", error=error_str)
+            raise ClaudeProcessError(f"Claude SDK error: {error_str}")
 
         except Exception as e:
             exceptions = getattr(e, "exceptions", None)
