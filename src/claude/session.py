@@ -123,6 +123,20 @@ class SessionManager:
         self.storage = storage
         self.active_sessions: Dict[str, ClaudeSession] = {}
 
+    async def _publish_active_sessions_metric(self) -> None:
+        """Keep the ``bot_active_sessions`` gauge in sync.
+
+        Called from every code path that mutates
+        ``self.active_sessions``. Metrics failures are swallowed so a
+        broken gauge never breaks session management.
+        """
+        try:
+            from ..observability import bot_metrics
+
+            await bot_metrics.active_sessions.set(float(len(self.active_sessions)))
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to record active_sessions gauge")
+
     async def get_or_create_session(
         self,
         user_id: int,
@@ -156,6 +170,7 @@ class SessionManager:
             session = await self.storage.load_session(session_id, user_id)
             if session and not session.is_expired(self.config.session_timeout_hours):
                 self.active_sessions[session_id] = session
+                await self._publish_active_sessions_metric()
                 logger.info("Loaded session from storage", session_id=session_id)
                 return session
 
@@ -220,6 +235,7 @@ class SessionManager:
         if session.session_id:
             self.active_sessions[session.session_id] = session
             await self.storage.save_session(session)
+            await self._publish_active_sessions_metric()
 
         logger.debug(
             "Session updated",
@@ -232,6 +248,7 @@ class SessionManager:
         """Remove session."""
         if session_id in self.active_sessions:
             del self.active_sessions[session_id]
+            await self._publish_active_sessions_metric()
 
         await self.storage.delete_session(session_id)
         logger.info("Session removed", session_id=session_id)

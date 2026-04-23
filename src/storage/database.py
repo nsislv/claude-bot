@@ -464,7 +464,18 @@ class DatabaseManager:
 
     @asynccontextmanager
     async def get_connection(self) -> AsyncIterator[aiosqlite.Connection]:
-        """Get database connection from pool."""
+        """Get database connection from pool.
+
+        Instrumented with ``bot_db_query_latency_seconds`` — every
+        connection hold-time is observed on exit. This is a coarse
+        proxy for query latency (it includes the caller's Python
+        processing between ``execute`` calls, not just SQL time), but
+        it's the cheapest signal that covers every DB caller without
+        wrapping the ``aiosqlite`` API. Pool-exhaustion shows up as a
+        long tail; that's the practically useful signal.
+        """
+        import time as _time
+
         async with self._pool_lock:
             if self._connection_pool:
                 conn = self._connection_pool.pop()
@@ -475,9 +486,24 @@ class DatabaseManager:
                 conn.row_factory = aiosqlite.Row
                 await self._configure_connection(conn)
 
+        start = _time.monotonic()
         try:
             yield conn
         finally:
+            # Record hold-time before returning the connection so the
+            # metric reflects the critical section, not queue time.
+            elapsed = _time.monotonic() - start
+            # Import lazily + wrapped so a metrics failure can never
+            # prevent a connection from being returned to the pool.
+            try:
+                from ..observability import bot_metrics
+
+                await bot_metrics.db_query_latency_seconds.observe(elapsed)
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "Failed to record db_query_latency metric", elapsed=elapsed
+                )
+
             async with self._pool_lock:
                 if len(self._connection_pool) < self._pool_size:
                     self._connection_pool.append(conn)
