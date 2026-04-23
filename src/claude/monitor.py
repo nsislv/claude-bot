@@ -21,15 +21,13 @@ _FS_MODIFYING_COMMANDS: Set[str] = {
     "cd",
 }
 
-# Commands that are read-only or don't take filesystem paths
-_READ_ONLY_COMMANDS: Set[str] = {
-    "cat",
-    "ls",
-    "head",
-    "tail",
-    "less",
-    "more",
-    "which",
+# Read-only commands that take NO filesystem paths at all — safe to
+# skip path validation entirely. ``echo`` / ``printf`` print literals;
+# ``pwd`` / ``whoami`` / ``date`` / ``env`` / ``printenv`` return
+# process state; ``which`` resolves command names; ``dirname`` /
+# ``basename`` are pure string ops on path-like arguments, not file
+# accesses.
+_NO_PATH_COMMANDS: Set[str] = {
     "whoami",
     "pwd",
     "echo",
@@ -37,6 +35,26 @@ _READ_ONLY_COMMANDS: Set[str] = {
     "env",
     "printenv",
     "date",
+    "which",
+    "dirname",
+    "basename",
+}
+
+# Read-only commands that DO take filesystem paths and must have those
+# paths validated. Pre-H3 these lived in a single
+# ``_READ_ONLY_COMMANDS`` bucket that skipped path validation entirely,
+# which meant ``cat /etc/shadow`` / ``tail ~/.ssh/id_rsa`` /
+# ``stat /home/other-user/`` passed the boundary check and reached the
+# OS — a data-exfil path any authenticated user could pull via Claude.
+# Reads outside ``APPROVED_DIRECTORY`` are disclosure, even without
+# mutation.
+_READ_WITH_PATHS_COMMANDS: Set[str] = {
+    "cat",
+    "ls",
+    "head",
+    "tail",
+    "less",
+    "more",
     "wc",
     "sort",
     "uniq",
@@ -47,8 +65,6 @@ _READ_ONLY_COMMANDS: Set[str] = {
     "df",
     "tree",
     "realpath",
-    "dirname",
-    "basename",
 }
 
 # Actions / expressions that make ``find`` a filesystem-modifying command
@@ -98,8 +114,8 @@ def check_bash_directory_boundary(
 
         base_command = Path(cmd_tokens[0]).name
 
-        # Read-only commands are always allowed
-        if base_command in _READ_ONLY_COMMANDS:
+        # No-path commands (echo, pwd, whoami, …) are always allowed.
+        if base_command in _NO_PATH_COMMANDS:
             continue
 
         # Determine if this specific command in the chain needs path validation
@@ -107,6 +123,11 @@ def check_bash_directory_boundary(
         if base_command == "find":
             needs_check = any(t in _FIND_MUTATING_ACTIONS for t in cmd_tokens[1:])
         elif base_command in _FS_MODIFYING_COMMANDS:
+            needs_check = True
+        elif base_command in _READ_WITH_PATHS_COMMANDS:
+            # H3 — path-bearing read commands must also stay inside the
+            # approved directory. Read access to ``/etc/shadow`` is
+            # data disclosure even without mutation.
             needs_check = True
 
         if not needs_check:

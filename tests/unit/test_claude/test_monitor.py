@@ -85,11 +85,50 @@ class TestCheckBashDirectoryBoundary:
         assert not valid
         assert "directory boundary violation" in error.lower()
 
-    def test_read_only_commands_pass(self) -> None:
-        for cmd in ["cat /etc/hosts", "ls /tmp", "head /var/log/syslog"]:
+    def test_no_path_read_commands_always_pass(self) -> None:
+        """Commands that take no filesystem paths (``pwd``, ``whoami``,
+        ``date`` etc.) pass through regardless of what follows them."""
+        for cmd in ["pwd", "whoami", "date", "echo hello world", "env"]:
             valid, error = check_bash_directory_boundary(cmd, self.cwd, self.approved)
-            assert valid, f"Expected read-only command to pass: {cmd}"
+            assert valid, f"Expected no-path command to pass: {cmd}"
             assert error is None
+
+    def test_read_commands_inside_approved_directory_pass(self) -> None:
+        """Read-with-path commands against files INSIDE the approved
+        tree are fine — H3's fix is about the OUTSIDE case."""
+        approved_file = self.approved / "notes.md"
+        for cmd in [
+            f"cat {approved_file}",
+            f"head {approved_file}",
+            f"ls {self.approved}",
+            f"stat {approved_file}",
+        ]:
+            valid, error = check_bash_directory_boundary(cmd, self.cwd, self.approved)
+            assert valid, f"Expected read inside approved dir to pass: {cmd}"
+            assert error is None
+
+    def test_read_commands_outside_approved_directory_rejected(self) -> None:
+        """H3 regression test — pre-fix these all passed, leaking
+        arbitrary host files back to the user via Claude."""
+        for cmd in [
+            "cat /etc/hosts",
+            "cat /etc/shadow",
+            "tail /var/log/auth.log",
+            "head /etc/passwd",
+            "ls /tmp",
+            "less /var/log/syslog",
+            "stat /home/other-user/.ssh/id_rsa",
+            "tree /home",
+            "du /var",
+            "realpath /etc/shadow",
+        ]:
+            valid, error = check_bash_directory_boundary(cmd, self.cwd, self.approved)
+            assert not valid, (
+                f"H3: read-with-path command outside approved dir "
+                f"must be rejected: {cmd}"
+            )
+            assert error is not None
+            assert "directory boundary violation" in error.lower()
 
     def test_non_fs_commands_pass(self) -> None:
         """Commands not in the filesystem-modifying set pass through."""
