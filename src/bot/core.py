@@ -55,6 +55,23 @@ class ClaudeCodeBot:
         builder.defaults(Defaults(do_quote=self.settings.reply_quote))
         builder.rate_limiter(AIORateLimiter(max_retries=1))
 
+        # R4 — optional PTB persistence. When ``ptb_persistence_path``
+        # is set, ``context.user_data`` (``current_directory``,
+        # ``claude_session_id``, ``verbose_level``, thread state) is
+        # pickled to disk so a restart doesn't wipe per-user state.
+        # The parent directory is created on demand so the operator
+        # only has to pick a filename.
+        persistence_path = self.settings.ptb_persistence_path
+        if persistence_path is not None:
+            from telegram.ext import PicklePersistence
+
+            persistence_path.parent.mkdir(parents=True, exist_ok=True)
+            builder.persistence(PicklePersistence(filepath=str(persistence_path)))
+            logger.info(
+                "PTB persistence enabled",
+                path=str(persistence_path),
+            )
+
         from .update_processor import StopAwareUpdateProcessor
 
         builder.concurrent_updates(StopAwareUpdateProcessor())
