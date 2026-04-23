@@ -40,8 +40,16 @@ class ClaudeIntegration:
         force_new: bool = False,
         interrupt_event: Optional["asyncio.Event"] = None,
         images: Optional[List[Dict[str, str]]] = None,
+        allowed_tools_override: Optional[List[str]] = None,
     ) -> ClaudeResponse:
-        """Run Claude Code command with full integration."""
+        """Run Claude Code command with full integration.
+
+        ``allowed_tools_override`` — optional tighter tool allowlist
+        for a single call. Propagated verbatim to the SDK manager;
+        see :meth:`ClaudeSDKManager.execute_command` for semantics.
+        Typical caller: webhook-initiated runs (M1) restricting the
+        agent to read-only tools.
+        """
         logger.info(
             "Running Claude command",
             user_id=user_id,
@@ -90,6 +98,7 @@ class ClaudeIntegration:
                     stream_callback=on_stream,
                     interrupt_event=interrupt_event,
                     images=images,
+                    allowed_tools_override=allowed_tools_override,
                 )
             except Exception as resume_error:
                 # If resume failed (e.g., session expired/missing on Claude's side),
@@ -116,6 +125,7 @@ class ClaudeIntegration:
                         stream_callback=on_stream,
                         interrupt_event=interrupt_event,
                         images=images,
+                        allowed_tools_override=allowed_tools_override,
                     )
                 else:
                     raise
@@ -161,6 +171,7 @@ class ClaudeIntegration:
         stream_callback: Optional[Callable] = None,
         interrupt_event: Optional[asyncio.Event] = None,
         images: Optional[List[Dict[str, str]]] = None,
+        allowed_tools_override: Optional[List[str]] = None,
     ) -> ClaudeResponse:
         """Execute command via SDK."""
         return await self.sdk_manager.execute_command(
@@ -171,6 +182,7 @@ class ClaudeIntegration:
             stream_callback=stream_callback,
             interrupt_event=interrupt_event,
             images=images,
+            allowed_tools_override=allowed_tools_override,
         )
 
     async def _find_resumable_session(

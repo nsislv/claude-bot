@@ -277,8 +277,16 @@ class ClaudeSDKManager:
         stream_callback: Optional[Callable[[StreamUpdate], None]] = None,
         interrupt_event: Optional[asyncio.Event] = None,
         images: Optional[List[Dict[str, str]]] = None,
+        allowed_tools_override: Optional[List[str]] = None,
     ) -> ClaudeResponse:
-        """Execute Claude Code command via SDK."""
+        """Execute Claude Code command via SDK.
+
+        ``allowed_tools_override`` — when provided, replaces the
+        config-level ``claude_allowed_tools`` list and also suppresses
+        the ``DISABLE_TOOL_VALIDATION`` bypass. Used by callers that
+        need a tighter tool set than the default, e.g. webhook-
+        initiated runs (M1 from upgrade.md) that only need read access.
+        """
         start_time = asyncio.get_event_loop().time()
 
         logger.info(
@@ -309,9 +317,19 @@ class ClaudeSDKManager:
                     path=str(claude_md_path),
                 )
 
-            # When DISABLE_TOOL_VALIDATION=true, pass None for allowed/disallowed
-            # tools so the SDK does not restrict tool usage (e.g. MCP tools).
-            if self.config.disable_tool_validation:
+            # Tool allowlist selection:
+            #   1. If the caller passed ``allowed_tools_override`` we
+            #      honour it *unconditionally* — the override exists
+            #      specifically to tighten the tool set below the config
+            #      default for sensitive entry paths (M1: webhook
+            #      runs). DISABLE_TOOL_VALIDATION does NOT widen it.
+            #   2. Else if DISABLE_TOOL_VALIDATION is set, pass None so
+            #      the SDK does not restrict tool usage (e.g. MCP tools).
+            #   3. Else use the config defaults.
+            if allowed_tools_override is not None:
+                sdk_allowed_tools = allowed_tools_override
+                sdk_disallowed_tools = self.config.claude_disallowed_tools
+            elif self.config.disable_tool_validation:
                 sdk_allowed_tools = None
                 sdk_disallowed_tools = None
             else:
