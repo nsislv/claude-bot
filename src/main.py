@@ -92,6 +92,63 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def enforce_security_flag_guardrails(config: Settings, logger: Any) -> None:
+    """H1 — refuse to boot unless ``DISABLE_*`` flags have explicit sign-off.
+
+    ``DISABLE_SECURITY_PATTERNS=true`` turns off all path-traversal and
+    shell-pattern validation. ``DISABLE_TOOL_VALIDATION=true`` turns off
+    the entire Claude tool allowlist. Either alone lets an attacker (or
+    Claude, via prompt injection) read ``~/.ssh/id_rsa`` or run arbitrary
+    bash.
+
+    Both used to default to ``false``, but a single typo in a deployment
+    config silently neutered the security model with no loud signal.
+    This function:
+
+    1. Refuses to start if either flag is true and
+       ``I_UNDERSTAND_SECURITY_IS_DISABLED`` is not also true.
+    2. Emits a ``critical``-level log entry naming every flag that is
+       enabled, so the warning is visible even when the opt-in is
+       present and the bot proceeds to boot.
+
+    Called from :func:`create_application` before any security component
+    is constructed — so the refusal happens before any listener is
+    bound and before any Claude wiring is initialised.
+    """
+    relaxed_flags = []
+    if config.disable_security_patterns:
+        relaxed_flags.append("DISABLE_SECURITY_PATTERNS")
+    if config.disable_tool_validation:
+        relaxed_flags.append("DISABLE_TOOL_VALIDATION")
+
+    if not relaxed_flags:
+        return
+
+    if not config.i_understand_security_is_disabled:
+        raise ConfigurationError(
+            "Refusing to start: "
+            + ", ".join(relaxed_flags)
+            + " is enabled, but I_UNDERSTAND_SECURITY_IS_DISABLED is not set to "
+            "true. These flags disable path-traversal validation and/or "
+            "the Claude tool allowlist — with them on, authorized users "
+            "(or Claude, via prompt injection) can read ~/.ssh/id_rsa or "
+            "run arbitrary shell. Set I_UNDERSTAND_SECURITY_IS_DISABLED=true "
+            "in the environment to explicitly acknowledge this and start "
+            "the bot anyway."
+        )
+
+    logger.critical(
+        "SECURITY IS INTENTIONALLY DEGRADED — "
+        + ", ".join(relaxed_flags)
+        + " is enabled. Authorized users (or Claude, via prompt injection) "
+        "can read arbitrary files and run arbitrary shell. Do NOT run in "
+        "production.",
+        relaxed_flags=relaxed_flags,
+        disable_security_patterns=config.disable_security_patterns,
+        disable_tool_validation=config.disable_tool_validation,
+    )
+
+
 def build_auth_providers(
     config: Settings,
     logger: Any,
@@ -190,6 +247,11 @@ async def create_application(config: Settings) -> Dict[str, Any]:
     """Create and configure the application components."""
     logger = structlog.get_logger()
     logger.info("Creating application components")
+
+    # H1 — refuse to boot if DISABLE_* flags are on without an explicit
+    # operator opt-in. Runs before any security component is built so
+    # we fail loudly before any listener is bound.
+    enforce_security_flag_guardrails(config, logger)
 
     features = FeatureFlags(config)
 

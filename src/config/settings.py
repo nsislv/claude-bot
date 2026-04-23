@@ -66,6 +66,19 @@ class Settings(BaseSettings):
         False,
         description="Allow all Claude tools by bypassing tool validation checks",
     )
+    # Second opt-in required when any DISABLE_* flag above is true.
+    # Without this, the bot refuses to start — closing the footgun where
+    # a single typo in a deployment config silently neuters the entire
+    # security model. See ``enforce_security_flag_guardrails`` in main.py.
+    i_understand_security_is_disabled: bool = Field(
+        False,
+        description=(
+            "Explicit opt-in required when DISABLE_SECURITY_PATTERNS or "
+            "DISABLE_TOOL_VALIDATION is true. Acknowledges that the "
+            "operator understands tool allowlisting and/or path/shell "
+            "pattern validation is turned off."
+        ),
+    )
 
     # Claude settings
     claude_binary_path: Optional[str] = Field(
