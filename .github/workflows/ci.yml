@@ -31,8 +31,14 @@ jobs:
           path: .venv
           key: venv-${{ runner.os }}-3.11-${{ hashFiles('**/poetry.lock') }}
 
+      - name: Verify poetry.lock is consistent with pyproject.toml
+        # A stale lockfile is how a merged PR breaks everyone else's
+        # install. Run this *before* `poetry install`, so the install
+        # cannot silently rewrite the lockfile and mask drift.
+        run: poetry check --lock
+
       - name: Install dependencies
-        run: poetry lock && poetry install
+        run: poetry install --no-interaction
 
       - name: Check formatting (black)
         run: poetry run black --check src tests
@@ -42,6 +48,15 @@ jobs:
 
       - name: Lint (flake8)
         run: poetry run flake8 src tests
+
+      - name: Type-check (mypy, non-blocking)
+        # mypy runs but is not yet gated because the repo has a large
+        # backlog of pre-existing type errors. Publishing the output
+        # makes drift visible and prevents new errors from being
+        # silently added — once the backlog is cleared, flip this step
+        # to blocking by removing ``continue-on-error``.
+        continue-on-error: true
+        run: poetry run mypy src
 
   test:
     runs-on: ubuntu-latest

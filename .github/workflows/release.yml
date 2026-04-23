@@ -32,6 +32,9 @@ jobs:
           path: .venv
           key: venv-${{ runner.os }}-3.11-${{ hashFiles('**/poetry.lock') }}
 
+      - name: Verify poetry.lock is consistent
+        run: poetry check --lock
+
       - name: Install dependencies
         run: poetry install --no-interaction
 
@@ -56,6 +59,21 @@ jobs:
       - name: Extract version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches pyproject.toml version
+        # A release that ships under tag v1.7.0 while pyproject says
+        # 1.6.0 means users `pip install`-ing the tag get a package
+        # whose internal version disagrees with the release name —
+        # every observability tool downstream reports the wrong
+        # number, and rollback tooling breaks. Refuse to publish.
+        run: |
+          PYPROJECT_VERSION=$(grep -E '^version = ' pyproject.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
+          TAG_VERSION="${{ steps.version.outputs.VERSION }}"
+          if [ "$PYPROJECT_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag version (${TAG_VERSION}) does not match pyproject.toml version (${PYPROJECT_VERSION}). Bump pyproject.toml before tagging."
+            exit 1
+          fi
+          echo "Tag and pyproject versions match: ${TAG_VERSION}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
