@@ -209,9 +209,21 @@ async def validate_message_content(
 
 
 async def validate_file_upload(
-    document: Any, security_validator: Any, user_id: int, audit_logger: Any
+    document: Any,
+    security_validator: Any,
+    user_id: int,
+    audit_logger: Any,
+    file_bytes: bytes | None = None,
 ) -> tuple[bool, str]:
-    """Validate file uploads for security."""
+    """Validate file uploads for security.
+
+    M6 fix — when ``file_bytes`` is provided, the function also runs a
+    magic-byte inspection of the actual content (not just Telegram's
+    claimed ``file_name`` / ``mime_type``, both of which are
+    attacker-controllable). Callers that have already downloaded the
+    file should pass the bytes; metadata-only callers can omit and
+    the function falls back to the legacy name + MIME checks.
+    """
 
     filename = getattr(document, "file_name", "unknown")
     file_size = getattr(document, "file_size", 0)
@@ -279,6 +291,70 @@ async def validate_file_upload(
             mime_type=mime_type,
         )
         return False, f"File type not allowed: {mime_type}"
+
+    # M6 — magic-byte inspection. Only runs when the caller has the
+    # bytes in hand (``file_bytes`` passed). Catches:
+    #   - An ``.exe`` renamed ``image.png`` (claimed MIME is image,
+    #     magic bytes say PE/ELF/Mach-O → reject).
+    #   - A text file renamed ``photo.zip`` with a harmful
+    #     ``.exe`` hidden inside (claimed extension is zip, magic
+    #     bytes disagree → reject for mismatch).
+    if file_bytes is not None:
+        from ..features.magic_bytes import (
+            detect_type,
+            extension_matches_type,
+            is_executable,
+        )
+
+        detected = detect_type(bytes(file_bytes))
+
+        if is_executable(detected):
+            if audit_logger:
+                await audit_logger.log_security_violation(
+                    user_id=user_id,
+                    violation_type="executable_upload",
+                    details=(
+                        f"Executable binary detected (magic bytes = "
+                        f"{detected}); filename={filename}, claimed "
+                        f"MIME={mime_type}"
+                    ),
+                    severity="high",
+                    attempted_action="file_upload",
+                )
+            logger.warning(
+                "Executable upload blocked by magic-byte check",
+                user_id=user_id,
+                filename=filename,
+                claimed_mime=mime_type,
+                detected=detected,
+            )
+            return False, "Executable uploads are not allowed."
+
+        if not extension_matches_type(filename, detected):
+            if audit_logger:
+                await audit_logger.log_security_violation(
+                    user_id=user_id,
+                    violation_type="mime_extension_mismatch",
+                    details=(
+                        f"Extension does not match magic-byte type; "
+                        f"filename={filename}, detected={detected}, "
+                        f"claimed MIME={mime_type}"
+                    ),
+                    severity="medium",
+                    attempted_action="file_upload",
+                )
+            logger.warning(
+                "File extension does not match content",
+                user_id=user_id,
+                filename=filename,
+                claimed_mime=mime_type,
+                detected=detected,
+            )
+            return False, (
+                f"File extension does not match its content "
+                f"(detected type: {detected}). Rename the file or "
+                f"upload the correct one."
+            )
 
     # Log successful file validation
     if audit_logger:
