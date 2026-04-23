@@ -182,9 +182,18 @@ async def run_api_server(
 
     app = create_api_app(event_bus, settings, db_manager)
 
+    # Bind to the configured host (defaults to loopback per M4). A log
+    # line at info level records the bind so operators who intended a
+    # public-facing server but forgot to set ``API_SERVER_HOST``
+    # notice quickly rather than silently missing webhook deliveries.
+    logger.info(
+        "Starting webhook API server",
+        host=settings.api_server_host,
+        port=settings.api_server_port,
+    )
     config = uvicorn.Config(
         app=app,
-        host="0.0.0.0",
+        host=settings.api_server_host,
         port=settings.api_server_port,
         log_level="info" if not settings.debug else "debug",
     )
