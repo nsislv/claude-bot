@@ -6,7 +6,6 @@ classic mode, delegates to existing full-featured handlers.
 """
 
 import asyncio
-import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +31,12 @@ from telegram.ext import (
 from ..claude.sdk_integration import StreamUpdate
 from ..config.settings import Settings
 from ..projects import PrivateTopicsUnavailableError
+
+# Secret-redaction patterns live in ``src.utils.redaction`` so the
+# SDK integration (and any future log sink) can apply the same rules
+# — keeping the backwards-compatible private name here for code
+# outside this module that imports ``_redact_secrets`` directly.
+from ..utils.redaction import redact_secrets as _redact_secrets
 from .utils.draft_streamer import DraftStreamer, generate_draft_id
 from .utils.html_format import escape_html
 from .utils.image_extractor import (
@@ -48,48 +53,6 @@ _MEDIA_TYPE_MAP = {
     "gif": "image/gif",
     "webp": "image/webp",
 }
-
-# Patterns that look like secrets/credentials in CLI arguments
-_SECRET_PATTERNS: List[re.Pattern[str]] = [
-    # API keys / tokens (sk-ant-..., sk-..., ghp_..., gho_..., github_pat_..., xoxb-...)
-    re.compile(
-        r"(sk-ant-api\d*-[A-Za-z0-9_-]{10})[A-Za-z0-9_-]*"
-        r"|(sk-[A-Za-z0-9_-]{20})[A-Za-z0-9_-]*"
-        r"|(ghp_[A-Za-z0-9]{5})[A-Za-z0-9]*"
-        r"|(gho_[A-Za-z0-9]{5})[A-Za-z0-9]*"
-        r"|(github_pat_[A-Za-z0-9_]{5})[A-Za-z0-9_]*"
-        r"|(xoxb-[A-Za-z0-9]{5})[A-Za-z0-9-]*"
-    ),
-    # AWS access keys
-    re.compile(r"(AKIA[0-9A-Z]{4})[0-9A-Z]{12}"),
-    # Generic long hex/base64 tokens after common flags/env patterns
-    re.compile(
-        r"((?:--token|--secret|--password|--api-key|--apikey|--auth)"
-        r"[= ]+)['\"]?[A-Za-z0-9+/_.:-]{8,}['\"]?"
-    ),
-    # Inline env assignments like KEY=value
-    re.compile(
-        r"((?:TOKEN|SECRET|PASSWORD|API_KEY|APIKEY|AUTH_TOKEN|PRIVATE_KEY"
-        r"|ACCESS_KEY|CLIENT_SECRET|WEBHOOK_SECRET)"
-        r"=)['\"]?[^\s'\"]{8,}['\"]?"
-    ),
-    # Bearer / Basic auth headers
-    re.compile(r"(Bearer )[A-Za-z0-9+/_.:-]{8,}" r"|(Basic )[A-Za-z0-9+/=]{8,}"),
-    # Connection strings with credentials  user:pass@host
-    re.compile(r"://([^:]+:)[^@]{4,}(@)"),
-]
-
-
-def _redact_secrets(text: str) -> str:
-    """Replace likely secrets/credentials with redacted placeholders."""
-    result = text
-    for pattern in _SECRET_PATTERNS:
-        result = pattern.sub(
-            lambda m: next((g + "***" for g in m.groups() if g is not None), "***"),
-            result,
-        )
-    return result
-
 
 # Tool name -> friendly emoji mapping for verbose output
 _TOOL_ICONS: Dict[str, str] = {
