@@ -160,16 +160,16 @@ def _format_error_message(error: Exception | str) -> str:
         return _format_process_error(error_str)
 
     # Any future ClaudeError subtypes not explicitly handled above —
-    # preserve their existing message as-is rather than downgrading
-    # to a generic "process error".
+    # M7: do NOT interpolate the raw error string into the user-
+    # facing message. It can include subprocess stderr, file paths,
+    # and API-level details that should stay in operator logs
+    # (the caller already records full details at ``error`` level).
     if isinstance(error_obj, ClaudeError):
-        safe_error = escape_html(error_str)
-        if len(safe_error) > 500:
-            safe_error = safe_error[:500] + "..."
         return (
-            f"❌ <b>Claude Error</b>\n\n"
-            f"{safe_error}\n\n"
-            f"Try again or use /new to start a fresh session."
+            "❌ <b>Claude Error</b>\n\n"
+            "An error occurred while contacting Claude.\n\n"
+            "Try again or use /new to start a fresh session.\n\n"
+            "<i>Full details have been logged for the administrator.</i>"
         )
 
     # --- Fall back to keyword matching (for string-only callers) --------
@@ -278,18 +278,28 @@ def _format_error_message(error: Exception | str) -> str:
 
 
 def _format_process_error(error_str: str) -> str:
-    """Format a Claude process/SDK error with the actual details."""
-    safe_error = escape_html(error_str)
-    if len(safe_error) > 500:
-        safe_error = safe_error[:500] + "..."
+    """Format a Claude process/SDK error for a user.
 
+    M7 — the raw ``error_str`` can contain subprocess stderr (file
+    paths, argv slices, snippets of Claude CLI output). That's
+    useful diagnostic data for the operator, not for the user. We
+    now return a GENERIC message — the full error is already
+    logged server-side at ``error`` level by the caller (see
+    ``orchestrator.agentic_text`` / ``handle_text_message``).
+
+    The raw string is still accepted as an argument (callers pass
+    it for backwards compat + future fine-grained formatting) but
+    is not interpolated into the user-visible text.
+    """
+    _ = error_str  # intentionally unused in the user-facing output
     return (
-        f"❌ <b>Claude Process Error</b>\n\n"
-        f"{safe_error}\n\n"
+        "❌ <b>Claude Process Error</b>\n\n"
+        "Something went wrong while running your request.\n\n"
         "<b>What you can do:</b>\n"
         "• Try your request again\n"
         "• Use /new to start a fresh session if the problem persists\n"
-        "• Check /status for current session state"
+        "• Check /status for current session state\n\n"
+        "<i>Full details have been logged for the administrator.</i>"
     )
 
 
