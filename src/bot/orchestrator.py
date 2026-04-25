@@ -650,17 +650,32 @@ class MessageOrchestrator:
                 _7d_bar = "█" * int(_7d_util * 10) + "░" * (10 - int(_7d_util * 10))
 
                 api_limits_str = (
-                    f"\n🌐 <b>Anthropic Limits</b>\n"
-                    f"  5h:  [{_5h_bar}] {_5h_util*100:.0f}%  · сброс {_5h_reset}\n"
-                    f"  7d:  [{_7d_bar}] {_7d_util*100:.0f}%  · сброс {_7d_reset}"
+                    f"\n🌐 <b>Anthropic</b>\n"
+                    f"  Model: <code>{_actual_model}</code>\n"
+                    f"  Limit 5h:  [{_5h_bar}] {_5h_util*100:.0f}%"
+                    f"  · reset in {_5h_reset}\n"
+                    f"  Limit 7d:  [{_7d_bar}] {_7d_util*100:.0f}%"
+                    f"  · reset in {_7d_reset}"
                 )
             else:
-                api_limits_str = "\n🌐 <b>Anthropic Limits</b>\n  <i>недоступно</i>"
+                api_limits_str = "\n🌐 <b>Anthropic</b>\n  <i>недоступно</i>"
         except Exception as _e:
-            api_limits_str = f"\n🌐 <b>Anthropic Limits</b>\n  <i>ошибка: {_e}</i>"
+            api_limits_str = f"\n🌐 <b>Anthropic</b>\n  <i>ошибка: {_e}</i>"
+
+        # Cost block — only relevant when using direct API key
+        using_api_key = bool(self.settings.anthropic_api_key)
+        cost_lines = []
+        if using_api_key:
+            cost_lines = [
+                "",
+                "💰 <b>Cost</b>",
+                f"  Used: <code>${current_cost:.4f}</code> / "
+                f"<code>${max_cost_user:.2f}</code>  [{cost_bar}] {cost_pct:.1f}%",
+                f"  Per request: <code>${max_cost_req:.2f}</code>",
+            ]
 
         lines = [
-            "📊 <b>Bot Status</b>",
+            "📊 <b>Status</b>",
             "",
             "🤖 <b>Model</b>",
             f"  Model: <code>{model_display}</code>",
@@ -673,14 +688,10 @@ class MessageOrchestrator:
             f"  Timeout: <code>{session_timeout_h}h</code>",
             f"  Verbose: <code>{verbose_display}</code>",
             "",
-            "💰 <b>Cost (bot)</b>",
-            f"  Used: <code>${current_cost:.4f}</code> / "
-            f"<code>${max_cost_user:.2f}</code>  [{cost_bar}] {cost_pct:.1f}%",
-            f"  Per request limit: <code>${max_cost_req:.2f}</code>",
-            "",
-            "⚡️ <b>Rate Limits (bot)</b>",
+            "⚡️ <b>Rate Limits</b>",
             f"  <code>{rl_requests}</code> req / <code>{rl_window}s</code>"
             f"  · burst: <code>{rl_burst}</code>",
+            *cost_lines,
             api_limits_str,
         ]
 
