@@ -120,7 +120,7 @@ class VoiceHandler:
     async def _transcribe_faster_whisper(self, voice_bytes: bytes) -> str:
         """Transcribe audio locally using faster-whisper."""
         try:
-            from faster_whisper import WhisperModel
+            import faster_whisper  # noqa: F401  # probe before executor
         except ModuleNotFoundError as exc:
             raise RuntimeError(
                 "faster-whisper is not installed. Run: pip install faster-whisper"
@@ -149,9 +149,7 @@ class VoiceHandler:
 
         text = text.strip()
         if not text:
-            raise ValueError(
-                "faster-whisper transcription returned an empty response."
-            )
+            raise ValueError("faster-whisper transcription returned an empty response.")
         return text
 
     @staticmethod

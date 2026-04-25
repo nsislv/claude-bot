@@ -29,7 +29,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .venv
-          key: venv-${{ runner.os }}-3.11-${{ hashFiles('**/poetry.lock') }}
+          key: venv-${{ runner.os }}-3.11-${{ hashFiles('**/poetry.lock', '**/pyproject.toml') }}-v2
 
       - name: Verify poetry.lock is consistent with pyproject.toml
         # A stale lockfile is how a merged PR breaks everyone else's
@@ -38,7 +38,7 @@ jobs:
         run: poetry check --lock
 
       - name: Install dependencies
-        run: poetry install --no-interaction
+        run: poetry install --no-interaction --with dev --sync
 
       - name: Check formatting (black)
         run: poetry run black --check src tests
@@ -80,10 +80,10 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .venv
-          key: venv-${{ runner.os }}-3.11-${{ hashFiles('**/poetry.lock') }}
+          key: venv-${{ runner.os }}-3.11-${{ hashFiles('**/poetry.lock', '**/pyproject.toml') }}-v2
 
       - name: Install dependencies
-        run: poetry lock && poetry install
+        run: poetry install --no-interaction --with dev --sync
 
       - name: Test
         run: make test
@@ -119,10 +119,10 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .venv
-          key: venv-${{ runner.os }}-3.11-${{ hashFiles('**/poetry.lock') }}
+          key: venv-${{ runner.os }}-3.11-${{ hashFiles('**/poetry.lock', '**/pyproject.toml') }}-v2
 
       - name: Install dependencies
-        run: poetry install --no-interaction
+        run: poetry install --no-interaction --with dev --sync
 
       - name: Run pip-audit
         continue-on-error: true
