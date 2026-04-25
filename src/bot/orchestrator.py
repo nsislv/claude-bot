@@ -319,10 +319,10 @@ class MessageOrchestrator:
         # Commands
         handlers = [
             ("start", self.agentic_start),
-            ("new", self.agentic_new),
+            ("fresh", self.agentic_new),
             ("status", self.agentic_status),
             ("verbose", self.agentic_verbose),
-            ("repo", self.agentic_repo),
+            ("repository", self.agentic_repo),
             ("restart", command.restart_command),
         ]
         if self.settings.enable_project_threads:
@@ -381,6 +381,22 @@ class MessageOrchestrator:
             CallbackQueryHandler(
                 self._inject_deps(self._handle_stop_callback),
                 pattern=r"^stop:",
+            )
+        )
+
+        # /verbose inline keyboard callback
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(self._handle_verbose_callback),
+                pattern=r"^verbose:",
+            )
+        )
+
+        # /repository "Ok" confirm-and-dismiss button
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(self._handle_repo_ok),
+                pattern=r"^repo_ok$",
             )
         )
 
@@ -452,10 +468,10 @@ class MessageOrchestrator:
         if self.settings.agentic_mode:
             commands = [
                 BotCommand("start", "Start the bot"),
-                BotCommand("new", "Start a fresh session"),
+                BotCommand("fresh", "Start a fresh session"),
                 BotCommand("status", "Show session status"),
-                BotCommand("verbose", "Set output verbosity (0/1/2)"),
-                BotCommand("repo", "List repos / switch workspace"),
+                BotCommand("verbose", "Set output verbosity"),
+                BotCommand("repository", "Switch workspace"),
                 BotCommand("restart", "Restart the bot"),
             ]
             if self.settings.enable_project_threads:
@@ -533,7 +549,7 @@ class MessageOrchestrator:
             f"Hi {safe_name}! I'm your AI coding assistant.\n"
             f"Just tell me what you need — I can read, write, and run code.\n\n"
             f"Working in: {dir_display}\n"
-            f"Commands: /new (reset) · /status"
+            f"Commands: /fresh (reset) · /status"
             f"{sync_line}",
             parse_mode="HTML",
         )
@@ -552,6 +568,17 @@ class MessageOrchestrator:
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """Detailed status: model, limits, session, cost."""
+        # Force a fresh probe of Anthropic rate limits so /status reflects the
+        # current 5h/7d windows even if the throttle would otherwise skip it.
+        try:
+            await self._refresh_anthropic_limits(
+                context.bot_data,
+                model=context.user_data.get("last_claude_model"),
+                force=True,
+            )
+        except Exception:
+            logger.debug("agentic_status: refresh limits failed", exc_info=True)
+
         model_display = (
             context.user_data.get("last_claude_model")
             or self.settings.claude_model
@@ -590,45 +617,54 @@ class MessageOrchestrator:
             except Exception:
                 return ts
 
+        # /status output: flat fields (Account, Model, Plan, Workspace).
+        # Section headers are intentionally omitted.
+        _account = context.bot_data.get("anthropic_account_info", {}) or {}
+        _plan = _account.get("plan")
+        _rl_tier = _account.get("rate_limit_tier")
+        _email = _account.get("email")
+        _plan_upper = _plan.upper() if _plan else None
+        _plan_display = (
+            f"{_plan_upper}({_rl_tier})"
+            if _plan_upper and _rl_tier
+            else (_plan_upper or _rl_tier)
+        )
+
         _cached = context.bot_data.get("anthropic_rate_limits", {})
-        if _cached:
-            _5h_util = float(_cached.get("5h_util", 0))
-            _7d_util = float(_cached.get("7d_util", 0))
-            _5h_reset = _fmt_reset(_cached.get("5h_reset", "0"))
-            _7d_reset = _fmt_reset(_cached.get("7d_reset", "0"))
-            _cached_model = _cached.get("model", model_display)
-            _5h_bar = "█" * int(_5h_util * 10) + "░" * (10 - int(_5h_util * 10))
-            _7d_bar = "█" * int(_7d_util * 10) + "░" * (10 - int(_7d_util * 10))
-            api_limits_str = (
-                f"\n🌐 <b>Anthropic</b>\n"
-                f"  Model: <code>{_cached_model}</code>\n"
-                f"  Limit 5h:  [{_5h_bar}] {_5h_util*100:.0f}%  {_5h_reset}\n"
-                f"  Limit 7d:  [{_7d_bar}] {_7d_util*100:.0f}%  {_7d_reset}"
-            )
-        else:
-            api_limits_str = (
-                f"\n🌐 <b>Anthropic</b>\n"
-                f"  Model: <code>{model_display}</code>\n"
-                f"  <i>лимиты появятся после первого сообщения</i>"
-            )
+        _cached_model = (
+            _cached.get("model")
+            if isinstance(_cached, dict) and _cached.get("model")
+            else model_display
+        )
+
+        # Workspace: relative-to-base when below it, else absolute.
+        _base = self.settings.approved_directory
+        _cur_dir = context.user_data.get("current_directory", _base)
+        try:
+            _rel = _cur_dir.resolve().relative_to(_base.resolve())
+            _workspace_display = "/" if str(_rel) == "." else f"/{_rel.as_posix()}"
+        except (ValueError, OSError):
+            _workspace_display = str(_cur_dir)
 
         # Cost block — only relevant when using direct API key
         using_api_key = bool(self.settings.anthropic_api_key)
         cost_lines = []
         if using_api_key:
             cost_lines = [
-                "",
                 "💰 <b>Cost</b>",
                 f"  Used: <code>${current_cost:.4f}</code> / "
                 f"<code>${max_cost_user:.2f}</code>  [{cost_bar}] {cost_pct:.1f}%",
                 f"  Per request: <code>${max_cost_req:.2f}</code>",
+                "",
             ]
 
-        lines = [
-            "📊 <b>Status</b>",
-            *cost_lines,
-            api_limits_str,
-        ]
+        lines: List[str] = [*cost_lines]
+        if _email:
+            lines.append(f"Account: <code>{_email}</code>")
+        lines.append(f"Model: <code>{_cached_model}</code>")
+        if _plan_display:
+            lines.append(f"Plan: <code>{_plan_display}</code>")
+        lines.append(f"Workspace: <code>{escape_html(_workspace_display)}</code>")
 
         await update.message.reply_text(
             "\n".join(lines),
@@ -642,13 +678,40 @@ class MessageOrchestrator:
             return int(user_override)
         return self.settings.verbose_level
 
+    @staticmethod
+    def _decode_jwt_payload(token: str) -> Optional[Dict[str, Any]]:
+        """Best-effort decode of a JWT's payload (no signature verification).
+
+        Returns None when the token isn't a JWT or fails to decode. Used to
+        surface email/plan claims for the /status display.
+        """
+        import base64
+        import json as _json
+
+        parts = token.split(".")
+        if len(parts) < 2:
+            return None
+        try:
+            payload_b64 = parts[1]
+            # base64url -> base64 with proper padding
+            padding = "=" * (-len(payload_b64) % 4)
+            decoded = base64.urlsafe_b64decode(payload_b64 + padding)
+            data = _json.loads(decoded.decode("utf-8"))
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
     async def _refresh_anthropic_limits(
-        self, bot_data: Dict[str, Any], model: Optional[str] = None
+        self,
+        bot_data: Dict[str, Any],
+        model: Optional[str] = None,
+        force: bool = False,
     ) -> None:
         """Fetch Anthropic unified rate-limit headers and cache them in bot_data.
 
-        Throttled to at most once every 5 minutes. Uses the OAuth access token
-        from ~/.claude/.credentials.json (same auth the Claude CLI uses).
+        Throttled to at most once every 5 minutes (use ``force=True`` to bypass,
+        e.g. when the user explicitly asked via /status). Uses the OAuth access
+        token from ~/.claude/.credentials.json (same auth the Claude CLI uses).
         Makes a minimal 1-token API call just to read the response headers.
         Errors are silently swallowed — rate-limits display is best-effort.
         """
@@ -661,7 +724,7 @@ class MessageOrchestrator:
 
         now = _time.monotonic()
         last = bot_data.get("anthropic_limits_last_refresh", 0.0)
-        if now - last < _REFRESH_INTERVAL:
+        if not force and now - last < _REFRESH_INTERVAL:
             return
 
         # Mark refresh time immediately to avoid parallel refreshes
@@ -673,19 +736,170 @@ class MessageOrchestrator:
             if not creds_path.exists():
                 return
             creds = _json.loads(creds_path.read_text())
+            oauth_blob = creds.get("claudeAiOauth") or {}
             token = (
-                creds.get("claudeAiOauth", {}).get("accessToken")
+                oauth_blob.get("accessToken")
                 or creds.get("oauthToken")
                 or creds.get("access_token")
             )
             if not token:
                 return
 
+            # Cache account/plan info derived from credentials + JWT claims.
+            # OAuth blob commonly carries {scopes, subscriptionType, ...};
+            # JWT payload usually carries {email, sub, ...}. Both are best-effort.
+            account_info: Dict[str, Any] = bot_data.get(
+                "anthropic_account_info", {}
+            ).copy() if isinstance(
+                bot_data.get("anthropic_account_info"), dict
+            ) else {}
+            # Diagnostic: log the *keys* present (no secret values) so we can
+            # see what's actually in this user's credentials when /status
+            # doesn't surface Plan/Account.
+            try:
+                _claims_for_log = self._decode_jwt_payload(token) or {}
+            except Exception:
+                _claims_for_log = {}
+            _SAFE_VALUE_KEYS = {
+                "email",
+                "user_email",
+                "subscription_type",
+                "subscriptionType",
+                "plan",
+                "tier",
+                "rateLimitTier",
+                "scopes",
+                "scope",
+                "organization_name",
+                "organization",
+                "org_name",
+            }
+            logger.info(
+                "Anthropic credentials keys",
+                top_keys=list(creds.keys()),
+                oauth_keys=list(oauth_blob.keys()),
+                oauth_safe_values={
+                    k: v
+                    for k, v in oauth_blob.items()
+                    if k in _SAFE_VALUE_KEYS
+                },
+                jwt_keys=list(_claims_for_log.keys())
+                if isinstance(_claims_for_log, dict)
+                else "not_jwt",
+                jwt_safe_values={
+                    k: v
+                    for k, v in (_claims_for_log or {}).items()
+                    if k in _SAFE_VALUE_KEYS
+                }
+                if isinstance(_claims_for_log, dict)
+                else {},
+            )
+            for key in ("subscriptionType", "subscription_type", "tier", "plan"):
+                v = oauth_blob.get(key)
+                if v:
+                    account_info["plan"] = str(v)
+                    break
+            _rl_tier = oauth_blob.get("rateLimitTier")
+            if _rl_tier:
+                account_info["rate_limit_tier"] = str(_rl_tier)
+            for key in ("emailAddress", "email"):
+                v = oauth_blob.get(key)
+                if v:
+                    account_info["email"] = str(v)
+                    break
+            try:
+                _claims = self._decode_jwt_payload(token)
+                if isinstance(_claims, dict):
+                    if "email" not in account_info:
+                        for key in ("email", "user_email"):
+                            v = _claims.get(key)
+                            if v:
+                                account_info["email"] = str(v)
+                                break
+                    if "plan" not in account_info:
+                        for key in (
+                            "subscription_type",
+                            "subscriptionType",
+                            "plan",
+                            "tier",
+                        ):
+                            v = _claims.get(key)
+                            if v:
+                                account_info["plan"] = str(v)
+                                break
+                    if "org" not in account_info:
+                        for key in (
+                            "organization_name",
+                            "organization",
+                            "org_name",
+                        ):
+                            v = _claims.get(key)
+                            if v:
+                                account_info["org"] = str(v)
+                                break
+            except Exception:
+                pass
+
             req_headers = {
                 "anthropic-version": "2023-06-01",
                 "Authorization": f"Bearer {token}",
                 "content-type": "application/json",
             }
+
+            # Try OAuth profile endpoint(s) for email — we have user:profile
+            # scope. Endpoints aren't formally documented; try a few known ones.
+            if "email" not in account_info:
+                _profile_endpoints = [
+                    "https://api.anthropic.com/api/oauth/profile",
+                    "https://api.anthropic.com/api/oauth/userinfo",
+                    "https://api.anthropic.com/api/account",
+                    "https://api.anthropic.com/api/me",
+                ]
+                async with httpx.AsyncClient(timeout=10) as _pc:
+                    for _url in _profile_endpoints:
+                        try:
+                            _r = await _pc.get(_url, headers=req_headers)
+                        except Exception as _pe:
+                            logger.info(
+                                "Profile endpoint network error",
+                                url=_url,
+                                error=str(_pe),
+                            )
+                            continue
+                        logger.info(
+                            "Profile endpoint response",
+                            url=_url,
+                            status=_r.status_code,
+                            body_preview=_r.text[:300] if _r.status_code != 200 else "<200 ok>",
+                        )
+                        if _r.status_code != 200:
+                            continue
+                        try:
+                            _data = _r.json()
+                        except Exception:
+                            continue
+                        if not isinstance(_data, dict):
+                            continue
+                        # Walk common shapes for an email field.
+                        _candidates = [_data]
+                        for _nest_key in ("user", "account", "profile", "data"):
+                            _nest = _data.get(_nest_key)
+                            if isinstance(_nest, dict):
+                                _candidates.append(_nest)
+                        for _obj in _candidates:
+                            for _ek in ("email", "emailAddress", "user_email"):
+                                _v = _obj.get(_ek)
+                                if _v:
+                                    account_info["email"] = str(_v)
+                                    break
+                            if "email" in account_info:
+                                break
+                        if "email" in account_info:
+                            break
+
+            if account_info:
+                bot_data["anthropic_account_info"] = account_info
+
             payload = {
                 "model": model or "claude-sonnet-4-5",
                 "max_tokens": 1,
@@ -712,34 +926,75 @@ class MessageOrchestrator:
                     cache["5h_reset"] = h["anthropic-ratelimit-unified-5h-reset"]
                 if "anthropic-ratelimit-unified-7d-reset" in h:
                     cache["7d_reset"] = h["anthropic-ratelimit-unified-7d-reset"]
-                if model:
+                # Only stamp the model when we actually captured rate-limit
+                # data — otherwise the cache becomes truthy with model-only
+                # contents and /status falsely renders 0%/0%.
+                if cache and model:
                     cache["model"] = model
+                # Log every anthropic-* header value so we can diagnose when
+                # the displayed limits look wrong (0%/0% etc.).
+                _anthropic_headers = {
+                    k: v for k, v in h.items() if k.lower().startswith("anthropic-")
+                }
+                logger.info(
+                    "Anthropic probe response",
+                    status=resp.status_code,
+                    anthropic_headers=_anthropic_headers,
+                )
+
                 # Only update cache if we got at least one header
                 if cache:
                     bot_data["anthropic_rate_limits"] = cache
-                    logger.debug(
-                        "Anthropic rate limits cached", headers=list(cache.keys())
+                    bot_data.pop("anthropic_limits_last_error", None)
+                else:
+                    bot_data["anthropic_limits_last_error"] = (
+                        f"HTTP {resp.status_code}: no rate-limit headers"
                     )
         except Exception as e:
-            logger.debug("Failed to refresh Anthropic rate limits", error=str(e))
+            err = f"{type(e).__name__}: {e}"
+            bot_data["anthropic_limits_last_error"] = err
+            logger.warning("Failed to refresh Anthropic rate limits", error=err)
             # Reset last refresh so next call tries again sooner
             bot_data["anthropic_limits_last_refresh"] = 0.0
 
     async def agentic_verbose(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Set output verbosity: /verbose [0|1|2]."""
+        """Set output verbosity: /verbose [0|1|2] or pick from inline buttons."""
         args = update.message.text.split()[1:] if update.message.text else []
+        labels = {0: "quiet", 1: "normal", 2: "detailed"}
+
         if not args:
             current = self._get_verbose_level(context)
-            labels = {0: "quiet", 1: "normal", 2: "detailed"}
+
+            def _btn_label(level: int) -> str:
+                # Mark the current selection so users see which one is active.
+                base = labels[level]
+                return f"• {base} •" if level == current else base
+
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            _btn_label(0), callback_data="verbose:0"
+                        ),
+                        InlineKeyboardButton(
+                            _btn_label(1), callback_data="verbose:1"
+                        ),
+                        InlineKeyboardButton(
+                            _btn_label(2), callback_data="verbose:2"
+                        ),
+                    ]
+                ]
+            )
             await update.message.reply_text(
-                f"Verbosity: <b>{current}</b> ({labels.get(current, '?')})\n\n"
-                "Usage: <code>/verbose 0|1|2</code>\n"
-                "  0 = quiet (final response only)\n"
-                "  1 = normal (tools + reasoning)\n"
-                "  2 = detailed (tools with inputs + reasoning)",
+                f"Verbosity: <b>{labels.get(current, '?')}</b>\n"
+                "Choose a level:\n"
+                "  quiet — final response only\n"
+                "  normal — tools + reasoning\n"
+                "  detailed — tools with inputs + reasoning",
                 parse_mode="HTML",
+                reply_markup=keyboard,
             )
             return
 
@@ -754,11 +1009,44 @@ class MessageOrchestrator:
             return
 
         context.user_data["verbose_level"] = level
-        labels = {0: "quiet", 1: "normal", 2: "detailed"}
         await update.message.reply_text(
-            f"Verbosity set to <b>{level}</b> ({labels[level]})",
+            f"Verbosity set to <b>{labels[level]}</b>",
             parse_mode="HTML",
         )
+
+    async def _handle_verbose_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Apply the level chosen from /verbose's inline keyboard."""
+        query = update.callback_query
+        if query is None or not query.data:
+            return
+        try:
+            level = int(query.data.split(":", 1)[1])
+        except (IndexError, ValueError):
+            await query.answer("Invalid selection", show_alert=False)
+            return
+        if level not in (0, 1, 2):
+            await query.answer("Invalid level", show_alert=False)
+            return
+
+        context.user_data["verbose_level"] = level
+        labels = {0: "quiet", 1: "normal", 2: "detailed"}
+        await query.answer(f"Verbosity: {labels[level]}", show_alert=False)
+        try:
+            await query.edit_message_text(
+                f"Verbosity set to <b>{labels[level]}</b>",
+                parse_mode="HTML",
+            )
+        except Exception:
+            # Editing may fail if the original message is gone — fall back
+            # to a fresh reply rather than letting the handler crash.
+            if update.effective_chat:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"Verbosity set to <b>{labels[level]}</b>",
+                    parse_mode="HTML",
+                )
 
     def _format_verbose_progress(
         self,
@@ -1792,98 +2080,147 @@ class MessageOrchestrator:
     async def agentic_repo(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """List repos in workspace or switch to one.
+        """Show a directory browser rooted at the current workspace.
 
-        /repo          — list subdirectories with git indicators
-        /repo <name>   — switch to that directory, resume session if available
+        /repository          — show current dir's subfolders + ".." up
+        /repository <name>   — switch to a subfolder of the current directory
         """
         args = update.message.text.split()[1:] if update.message.text else []
         base = self.settings.approved_directory
         current_dir = context.user_data.get("current_directory", base)
 
         if args:
-            # Switch to named repo
             target_name = args[0]
-            target_path = base / target_name
-            if not target_path.is_dir():
+            target_path = (current_dir / target_name).resolve()
+            if not self._path_within(target_path, base) or not target_path.is_dir():
                 await update.message.reply_text(
                     f"Directory not found: <code>{escape_html(target_name)}</code>",
                     parse_mode="HTML",
                 )
                 return
-
-            context.user_data["current_directory"] = target_path
-
-            # Try to find a resumable session
-            claude_integration = context.bot_data.get("claude_integration")
-            session_id = None
-            if claude_integration:
-                existing = await claude_integration._find_resumable_session(
-                    update.effective_user.id, target_path
-                )
-                if existing:
-                    session_id = existing.session_id
-            context.user_data["claude_session_id"] = session_id
-
-            is_git = (target_path / ".git").is_dir()
-            git_badge = " (git)" if is_git else ""
-            session_badge = " · session resumed" if session_id else ""
-
+            session_id = await self._switch_workspace(
+                context, update.effective_user.id, target_path
+            )
             await update.message.reply_text(
-                f"Switched to <code>{escape_html(target_name)}/</code>"
-                f"{git_badge}{session_badge}",
+                self._workspace_switch_text(base, target_path, session_id),
                 parse_mode="HTML",
             )
             return
 
-        # No args — list repos
+        text, markup = self._build_dir_browser(current_dir, base)
+        await update.message.reply_text(
+            text, parse_mode="HTML", reply_markup=markup
+        )
+
+    @staticmethod
+    def _path_within(path: Path, root: Path) -> bool:
+        """Return True if ``path`` is ``root`` or below it."""
+        try:
+            path.resolve().relative_to(root.resolve())
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _workspace_switch_text(
+        base: Path, target: Path, session_id: Optional[str]
+    ) -> str:
+        try:
+            rel = target.resolve().relative_to(base.resolve())
+            display = "/" if str(rel) == "." else f"/{rel.as_posix()}"
+        except ValueError:
+            display = str(target)
+        is_git = (target / ".git").is_dir()
+        git_badge = " (git)" if is_git else ""
+        session_badge = " (session resumed)" if session_id else ""
+        return (
+            f"Switched to <code>{escape_html(display)}</code>"
+            f"{git_badge}{session_badge}"
+        )
+
+    async def _switch_workspace(
+        self,
+        context: ContextTypes.DEFAULT_TYPE,
+        user_id: int,
+        target_path: Path,
+    ) -> Optional[str]:
+        """Update current_directory and resume a session if available."""
+        context.user_data["current_directory"] = target_path
+        claude_integration = context.bot_data.get("claude_integration")
+        session_id: Optional[str] = None
+        if claude_integration:
+            existing = await claude_integration._find_resumable_session(
+                user_id, target_path
+            )
+            if existing:
+                session_id = existing.session_id
+        context.user_data["claude_session_id"] = session_id
+        return session_id
+
+    def _build_dir_browser(
+        self, current_dir: Path, base: Path
+    ) -> "tuple[str, InlineKeyboardMarkup]":
+        """Render the listing text and inline keyboard for ``current_dir``."""
         try:
             entries = sorted(
                 [
                     d
-                    for d in base.iterdir()
+                    for d in current_dir.iterdir()
                     if d.is_dir() and not d.name.startswith(".")
                 ],
-                key=lambda d: d.name,
+                key=lambda d: d.name.lower(),
             )
+            error_line = ""
         except OSError as e:
-            await update.message.reply_text(f"Error reading workspace: {e}")
-            return
+            entries = []
+            error_line = f"\n<i>Error reading directory: {escape_html(str(e))}</i>"
 
-        if not entries:
-            await update.message.reply_text(
-                f"No repos in <code>{escape_html(str(base))}</code>.\n"
-                'Clone one by telling me, e.g. <i>"clone org/repo"</i>.',
-                parse_mode="HTML",
-            )
-            return
+        try:
+            rel = current_dir.resolve().relative_to(base.resolve())
+            header_path = "/" if str(rel) == "." else f"/{rel.as_posix()}"
+        except ValueError:
+            header_path = str(current_dir)
 
-        lines: List[str] = []
+        lines: List[str] = [
+            f"<b>Workspace:</b> <code>{escape_html(header_path)}</code>"
+        ]
+        if entries:
+            lines.append("")
+            for d in entries:
+                is_git = (d / ".git").is_dir()
+                icon = "\U0001f4e6" if is_git else "\U0001f4c1"
+                lines.append(f"{icon} <code>{escape_html(d.name)}/</code>")
+        else:
+            lines.append("<i>(no subfolders)</i>")
+        if error_line:
+            lines.append(error_line)
+
         keyboard_rows: List[list] = []  # type: ignore[type-arg]
-        current_name = current_dir.name if current_dir != base else None
-
-        for d in entries:
-            is_git = (d / ".git").is_dir()
-            icon = "\U0001f4e6" if is_git else "\U0001f4c1"
-            marker = " \u25c0" if d.name == current_name else ""
-            lines.append(f"{icon} <code>{escape_html(d.name)}/</code>{marker}")
-
-        # Build inline keyboard (2 per row)
+        try:
+            at_root = current_dir.resolve() == base.resolve()
+        except OSError:
+            at_root = False
+        # Top row: ".." (when not at root) + "Ok" to confirm current workspace
+        # and dismiss the browser without further navigation.
+        top_row: List[InlineKeyboardButton] = []
+        if not at_root and self._path_within(current_dir.parent, base):
+            top_row.append(InlineKeyboardButton("⬆ ..", callback_data="cd:.."))
+        top_row.append(InlineKeyboardButton("✅ Ok", callback_data="repo_ok"))
+        keyboard_rows.append(top_row)
         for i in range(0, len(entries), 2):
             row = []
             for j in range(2):
                 if i + j < len(entries):
                     name = entries[i + j].name
-                    row.append(InlineKeyboardButton(name, callback_data=f"cd:{name}"))
+                    safe = name[:55]
+                    row.append(
+                        InlineKeyboardButton(
+                            f"\U0001f4c1 {name}", callback_data=f"cd:{safe}"
+                        )
+                    )
             keyboard_rows.append(row)
 
-        reply_markup = InlineKeyboardMarkup(keyboard_rows)
-
-        await update.message.reply_text(
-            "<b>Repos</b>\n\n" + "\n".join(lines),
-            parse_mode="HTML",
-            reply_markup=reply_markup,
-        )
+        return "\n".join(lines), InlineKeyboardMarkup(keyboard_rows)
 
     async def _handle_stop_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -1920,52 +2257,79 @@ class MessageOrchestrator:
     async def _agentic_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Handle cd: callbacks — switch directory and resume session if available."""
+        """Handle cd: callbacks for the directory browser.
+
+        Resolves the target relative to the user's current workspace, switches
+        to it, and re-renders the browser in place so users can keep
+        navigating. ``cd:..`` walks up one level (clamped to the approved root).
+        """
         query = update.callback_query
         await query.answer()
 
         data = query.data
-        _, project_name = data.split(":", 1)
+        _, name = data.split(":", 1)
 
         base = self.settings.approved_directory
-        new_path = base / project_name
+        current_dir = context.user_data.get("current_directory", base)
 
-        if not new_path.is_dir():
+        if name == "..":
+            new_path = current_dir.parent
+        else:
+            new_path = current_dir / name
+        new_path = new_path.resolve()
+
+        if not self._path_within(new_path, base) or not new_path.is_dir():
             await query.edit_message_text(
-                f"Directory not found: <code>{escape_html(project_name)}</code>",
+                f"Directory not found: <code>{escape_html(name)}</code>",
                 parse_mode="HTML",
             )
             return
 
-        context.user_data["current_directory"] = new_path
-
-        # Look for a resumable session instead of always clearing
-        claude_integration = context.bot_data.get("claude_integration")
-        session_id = None
-        if claude_integration:
-            existing = await claude_integration._find_resumable_session(
-                query.from_user.id, new_path
-            )
-            if existing:
-                session_id = existing.session_id
-        context.user_data["claude_session_id"] = session_id
-
-        is_git = (new_path / ".git").is_dir()
-        git_badge = " (git)" if is_git else ""
-        session_badge = " · session resumed" if session_id else ""
-
-        await query.edit_message_text(
-            f"Switched to <code>{escape_html(project_name)}/</code>"
-            f"{git_badge}{session_badge}",
-            parse_mode="HTML",
+        session_id = await self._switch_workspace(
+            context, query.from_user.id, new_path
         )
 
-        # Audit log
+        # Re-render the browser at the new directory so the user can keep
+        # navigating without re-running /repository. The browser header
+        # already shows the active workspace, so no separate "Switched to"
+        # line is needed.
+        del session_id  # workspace is switched; result is reflected in header
+        text, markup = self._build_dir_browser(new_path, base)
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
+
         audit_logger = context.bot_data.get("audit_logger")
         if audit_logger:
             await audit_logger.log_command(
                 user_id=query.from_user.id,
                 command="cd",
-                args=[project_name],
+                args=[name],
                 success=True,
             )
+
+    async def _handle_repo_ok(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Confirm the current workspace and dismiss the directory browser."""
+        query = update.callback_query
+        await query.answer("OK")
+
+        base = self.settings.approved_directory
+        current_dir = context.user_data.get("current_directory", base)
+        try:
+            rel = current_dir.resolve().relative_to(base.resolve())
+            display = "/" if str(rel) == "." else f"/{rel.as_posix()}"
+        except (ValueError, OSError):
+            display = str(current_dir)
+
+        try:
+            await query.edit_message_text(
+                f"Workspace: <code>{escape_html(display)}</code>",
+                parse_mode="HTML",
+            )
+        except Exception:
+            # Best-effort dismiss; ignore Telegram edit failures.
+            pass

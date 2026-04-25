@@ -395,8 +395,8 @@ class ClaudeSDKManager:
                 sdk_allowed_tools = allowed_tools_override
                 sdk_disallowed_tools = self.config.claude_disallowed_tools
             elif self.config.disable_tool_validation:
-                sdk_allowed_tools = None
-                sdk_disallowed_tools = None
+                sdk_allowed_tools = []
+                sdk_disallowed_tools = []
             else:
                 sdk_allowed_tools = self.config.claude_allowed_tools
                 sdk_disallowed_tools = self.config.claude_disallowed_tools
@@ -779,10 +779,12 @@ class ClaudeSDKManager:
                     f"Claude SDK task error: {exceptions[0] if exceptions else e}"
                 )
 
+            import traceback as _tb
             logger.error(
                 "Unexpected error in Claude SDK",
                 error=str(e),
                 error_type=type(e).__name__,
+                traceback=_tb.format_exc(),
             )
             raise ClaudeProcessError(f"Unexpected error: {str(e)}")
 
