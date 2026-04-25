@@ -117,12 +117,12 @@ class StopAwareUpdateProcessor(BaseUpdateProcessor):
         async with request_context(user_id=user_id):
             if self._is_priority_callback(update):
                 # Run immediately -- no user lock
-                await coroutine
+                _ = await coroutine
                 return
 
             key = self._lock_key(update)
             async with self._user_locks[key]:
-                await coroutine
+                _ = await coroutine
 
     # ------------------------------------------------------------------
     # Introspection used by tests / future metrics

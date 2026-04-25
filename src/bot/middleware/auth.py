@@ -27,7 +27,7 @@ async def auth_middleware(handler: Callable, event: Any, data: Dict[str, Any]) -
 
     if not user_id:
         logger.warning("No user information in update")
-        return
+        return None
 
     # Get dependencies from context
     auth_manager = data.get("auth_manager")
@@ -39,7 +39,7 @@ async def auth_middleware(handler: Callable, event: Any, data: Dict[str, Any]) -
             await event.effective_message.reply_text(
                 "🔒 Authentication system unavailable. Please try again later."
             )
-        return
+        return None
 
     # Check if user is already authenticated
     if auth_manager.is_authenticated(user_id):
@@ -105,7 +105,7 @@ async def auth_middleware(handler: Callable, event: Any, data: Dict[str, Any]) -
                 "Share this ID with the administrator to request access.",
                 parse_mode="HTML",
             )
-        return  # Stop processing
+        return None  # Stop processing
 
 
 async def require_auth(handler: Callable, event: Any, data: Dict[str, Any]) -> Any:
@@ -121,7 +121,7 @@ async def require_auth(handler: Callable, event: Any, data: Dict[str, Any]) -> A
             await event.effective_message.reply_text(
                 "🔒 Authentication required to use this command."
             )
-        return
+        return None
 
     return await handler(event, data)
 
@@ -138,7 +138,7 @@ async def admin_required(handler: Callable, event: Any, data: Dict[str, Any]) ->
     if not auth_manager or not auth_manager.is_authenticated(user_id):
         if event.effective_message:
             await event.effective_message.reply_text("🔒 Authentication required.")
-        return
+        return None
 
     session = auth_manager.get_session(user_id)
     if not session or not session.user_info:
@@ -146,7 +146,7 @@ async def admin_required(handler: Callable, event: Any, data: Dict[str, Any]) ->
             await event.effective_message.reply_text(
                 "🔒 Session information unavailable."
             )
-        return
+        return None
 
     # Check for admin permissions (placeholder logic)
     permissions = session.user_info.get("permissions", [])
@@ -157,6 +157,6 @@ async def admin_required(handler: Callable, event: Any, data: Dict[str, Any]) ->
                 "This command requires administrator privileges.",
                 parse_mode="HTML",
             )
-        return
+        return None
 
     return await handler(event, data)

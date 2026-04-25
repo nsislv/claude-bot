@@ -133,6 +133,8 @@ class TestClassicHandlerDocumentDownloadWires:
             try:
                 await message_module.handle_document(update, context)
             except Exception:
+                # We only care that the spy was awaited; downstream
+                # send/format errors after validation are out of scope.
                 pass
 
         assert spy.await_count >= 1

@@ -297,6 +297,7 @@ class MessageOrchestrator:
             try:
                 await query.answer()
             except Exception:
+                # query.answer expires after ~1 minute — failure is harmless.
                 pass
             if query.message:
                 await query.message.reply_text(message, parse_mode="HTML")
@@ -797,8 +798,10 @@ class MessageOrchestrator:
                     try:
                         await chat.send_action("typing")
                     except Exception:
+                        # Telegram network blips shouldn't kill the heartbeat.
                         pass
             except asyncio.CancelledError:
+                # Expected: caller cancels the heartbeat when done.
                 pass
 
         return asyncio.create_task(_heartbeat())
@@ -909,6 +912,9 @@ class MessageOrchestrator:
                             new_text, reply_markup=reply_markup
                         )
                     except Exception:
+                        # edit_text fails on identical content / rate
+                        # limits / message-too-old; progress UI is
+                        # best-effort, drop and keep streaming.
                         pass
 
         return _on_stream
@@ -1857,6 +1863,7 @@ class MessageOrchestrator:
         try:
             await active.progress_msg.edit_text("Stopping...", reply_markup=None)
         except Exception:
+            # Best-effort UI hint; ignore Telegram edit failures.
             pass
 
     async def _agentic_callback(

@@ -252,15 +252,15 @@ class TestTokenHashingHMAC:
         critical path. A regression back to ``==`` would make this
         test fail — the sentinel argument is intercepted only if
         we call ``compare_digest``."""
-        import src.security.auth as auth_module
-
         calls: list = []
 
         def fake_compare_digest(a, b):
             calls.append((a, b))
             return a == b
 
-        monkeypatch.setattr(auth_module.hmac, "compare_digest", fake_compare_digest)
+        monkeypatch.setattr(
+            "src.security.auth.hmac.compare_digest", fake_compare_digest
+        )
 
         hashed = provider._hash_token("x")
         provider._verify_token("x", hashed)

@@ -482,6 +482,7 @@ async def continue_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if "status_msg" in locals():
                 await status_msg.delete()
         except Exception:
+            # Status message may already be gone; deletion is best-effort.
             pass
 
         # Send error response

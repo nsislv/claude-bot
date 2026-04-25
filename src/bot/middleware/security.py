@@ -59,7 +59,7 @@ async def security_middleware(
                 "If you believe this is an error, please contact the administrator.",
                 parse_mode="HTML",
             )
-            return  # Block processing
+            return None  # Block processing
 
     # Validate file uploads if present
     if message and message.document:
@@ -73,7 +73,7 @@ async def security_middleware(
                 "Please ensure your file meets security requirements.",
                 parse_mode="HTML",
             )
-            return  # Block processing
+            return None  # Block processing
 
     # Log successful security validation
     logger.debug(

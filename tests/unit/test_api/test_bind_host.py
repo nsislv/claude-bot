@@ -106,7 +106,7 @@ class TestBindIsLogged:
         )
 
         fake_uvicorn = MagicMock()
-        fake_uvicorn.Config = lambda **kwargs: MagicMock(**kwargs)
+        fake_uvicorn.Config = MagicMock
 
         class _NoopServer:
             def __init__(self, cfg):

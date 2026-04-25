@@ -647,6 +647,8 @@ class TestTypingHeartbeat:
         try:
             await heartbeat
         except asyncio.CancelledError:
+            # Expected after heartbeat.cancel(); awaiting surfaces
+            # the cancellation but the test only verifies side effects.
             pass
 
         # Should have been called multiple times
@@ -664,6 +666,8 @@ class TestTypingHeartbeat:
         try:
             await heartbeat
         except asyncio.CancelledError:
+            # Expected after heartbeat.cancel(); awaiting surfaces
+            # the cancellation but the test only verifies side effects.
             pass
 
         assert heartbeat.cancelled() or heartbeat.done()
@@ -688,6 +692,8 @@ class TestTypingHeartbeat:
         try:
             await heartbeat
         except asyncio.CancelledError:
+            # Expected after heartbeat.cancel(); awaiting surfaces
+            # the cancellation but the test only verifies side effects.
             pass
 
         # Should have called send_action more than 2 times (survived errors)

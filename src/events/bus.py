@@ -93,6 +93,7 @@ class EventBus:
             try:
                 await self._processor_task
             except asyncio.CancelledError:
+                # Expected: we just cancelled the processor task above.
                 pass
         logger.info("Event bus stopped")
 

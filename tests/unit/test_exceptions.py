@@ -16,19 +16,27 @@ def test_base_exception():
         raise ClaudeCodeTelegramError("Test error")
 
 
-def test_configuration_error():
+@pytest.mark.parametrize(
+    "raised, caught_as",
+    [
+        (ConfigurationError("Config error"), ClaudeCodeTelegramError),
+        (ConfigurationError("Config error"), ConfigurationError),
+    ],
+)
+def test_configuration_error(raised, caught_as):
     """Test configuration error inheritance."""
-    with pytest.raises(ClaudeCodeTelegramError):
-        raise ConfigurationError("Config error")
-
-    with pytest.raises(ConfigurationError):
-        raise ConfigurationError("Config error")
+    with pytest.raises(caught_as):
+        raise raised
 
 
-def test_security_error():
+@pytest.mark.parametrize(
+    "raised, caught_as",
+    [
+        (SecurityError("Security error"), ClaudeCodeTelegramError),
+        (AuthenticationError("Auth error"), SecurityError),
+    ],
+)
+def test_security_error(raised, caught_as):
     """Test security error inheritance."""
-    with pytest.raises(ClaudeCodeTelegramError):
-        raise SecurityError("Security error")
-
-    with pytest.raises(SecurityError):
-        raise AuthenticationError("Auth error")
+    with pytest.raises(caught_as):
+        raise raised

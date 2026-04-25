@@ -5,9 +5,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from telegram.ext import AIORateLimiter
 
-import src.bot.core as core_module
-from src.bot.core import ClaudeCodeBot
+from src.bot import core as core_module
 from src.config import create_test_config
+
+ClaudeCodeBot = core_module.ClaudeCodeBot
 
 
 @pytest.fixture

@@ -568,6 +568,7 @@ class ClaudeSDKManager:
                     try:
                         await run_task
                     except asyncio.CancelledError:
+                        # Expected: cleanup of the cancelled run_task.
                         pass
                     break  # user interrupted — don't retry
                 except asyncio.TimeoutError:
@@ -575,6 +576,7 @@ class ClaudeSDKManager:
                     try:
                         await run_task
                     except asyncio.CancelledError:
+                        # Expected: we just cancelled run_task on timeout.
                         pass
                     raise  # timeout — don't retry
                 except CLIConnectionError as exc:

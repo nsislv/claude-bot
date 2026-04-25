@@ -60,6 +60,7 @@ class NotificationService:
             try:
                 await self._sender_task
             except asyncio.CancelledError:
+                # Expected: we just cancelled the sender task above.
                 pass
         logger.info("Notification service stopped")
 

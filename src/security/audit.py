@@ -311,18 +311,24 @@ class JsonlAuditStorage(AuditStorage):
         return self._fh
 
     async def store_event(self, event: AuditEvent) -> None:
-        """Append one JSON line per event, then fsync."""
+        """Append one JSON line per event, then fsync.
+
+        The underlying ``self._fh`` is intentionally kept open across
+        writes for performance — opened lazily by ``_ensure_open`` and
+        released by ``close``. We don't bind a local alias here so
+        static analyzers don't mistake this for a leaked handle.
+        """
         async with self._lock:
-            fh = await self._ensure_open()
+            await self._ensure_open()
             # ``event.to_json`` handles datetime serialisation.
-            fh.write(event.to_json())
-            fh.write("\n")
-            fh.flush()
+            self._fh.write(event.to_json())
+            self._fh.write("\n")
+            self._fh.flush()
             if self._fsync_each_write:
                 try:
                     import os
 
-                    os.fsync(fh.fileno())
+                    os.fsync(self._fh.fileno())
                 except OSError:
                     # fsync can fail on some filesystems / pipes —
                     # the line is already in the OS buffer, and log
@@ -417,6 +423,8 @@ class JsonlAuditStorage(AuditStorage):
 
                     os.fsync(self._fh.fileno())
                 except OSError:
+                    # fsync may fail on closed pipes / non-POSIX fs;
+                    # close still proceeds below to release the FD.
                     pass
                 self._fh.close()
             self._fh = None

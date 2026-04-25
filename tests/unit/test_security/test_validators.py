@@ -337,9 +337,10 @@ class TestSecurityValidator:
 
     def test_whitespace_handling(self, validator):
         """Test handling of whitespace in paths and commands."""
-        # Test path with whitespace
-        valid, path, error = validator.validate_path("  project/file.txt  ")
-        # Should handle whitespace appropriately (likely by stripping)
+        # Test path with whitespace — call should not raise; result
+        # shape (valid, path, error) is not asserted here, the focus
+        # is on the command sanitization below.
+        validator.validate_path("  project/file.txt  ")
 
         # Test command sanitization with whitespace
         input_with_spaces = "  command   arg1    arg2  "

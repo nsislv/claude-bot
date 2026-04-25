@@ -1,7 +1,6 @@
 """Tests for storage facade."""
 
 import tempfile
-from datetime import datetime  # noqa: F401
 from pathlib import Path
 
 import pytest

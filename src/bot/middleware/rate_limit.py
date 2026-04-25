@@ -67,7 +67,7 @@ async def rate_limit_middleware(
         # Send user-friendly rate limit message
         if event.effective_message:
             await event.effective_message.reply_text(f"⏱️ {message}")
-        return  # Stop processing
+        return None  # Stop processing
 
     # Rate limit check passed
     logger.debug(
@@ -243,6 +243,6 @@ async def burst_protection_middleware(
                     "Too many rapid requests. Please wait 30 seconds before trying again.",
                     parse_mode="HTML",
                 )
-            return  # Block this request
+            return None  # Block this request
 
     return await handler(event, data)

@@ -325,6 +325,7 @@ class GitIntegration:
                         current_commit.deletions += deletions
                         current_commit.files_changed += 1
                     except ValueError:
+                        # Skip malformed numstat lines (e.g. binary diffs).
                         pass
 
         if current_commit:

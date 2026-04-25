@@ -502,6 +502,7 @@ async def run_application(app: Dict[str, Any]) -> None:
             try:
                 await task
             except asyncio.CancelledError:
+                # Expected during shutdown — task was just cancelled.
                 pass
 
     except Exception as e:
