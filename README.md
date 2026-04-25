@@ -178,8 +178,9 @@ Beyond direct chat, the bot can respond to external triggers:
 - **Webhooks** -- Receive GitHub events (push, PR, issues) and route them through Claude for automated summaries or code review
 - **Scheduler** -- Run recurring Claude tasks on a cron schedule (e.g., daily code health checks)
 - **Notifications** -- Deliver agent responses to configured Telegram chats
+- **Metrics** -- Scrape `/metrics` on the webhook API server for Prometheus-format counters and histograms (inbound messages, rate-limit rejections, DB query latency, active sessions)
 
-Enable with `ENABLE_API_SERVER=true` and `ENABLE_SCHEDULER=true`. See [docs/setup.md](docs/setup.md) for configuration.
+Enable with `ENABLE_API_SERVER=true` and `ENABLE_SCHEDULER=true`. The API server binds to `127.0.0.1` by default; set `API_SERVER_HOST=0.0.0.0` only if you are deliberately exposing the webhook endpoint. See [docs/setup.md](docs/setup.md) for configuration.
 
 ## Features
 
@@ -189,26 +190,35 @@ Enable with `ENABLE_API_SERVER=true` and `ENABLE_SCHEDULER=true`. See [docs/setu
 - Classic terminal-like mode with 13 commands and inline keyboards
 - Full Claude Code integration with SDK (primary) and CLI (fallback)
 - Automatic session persistence per user/project directory
-- Multi-layer authentication (whitelist + optional token-based)
-- Rate limiting with token bucket algorithm
+- Multi-layer authentication (whitelist + HMAC-SHA256 token auth)
+- Per-user concurrency lock -- long-running requests never block other users
+- Rate limiting with token bucket algorithm and real cost tracking
 - Directory sandboxing with path traversal prevention
-- File upload handling with archive extraction
+- File upload handling with magic-byte validation and archive extraction
 - Image/screenshot upload with analysis
 - Voice message transcription (Mistral Voxtral / OpenAI Whisper / [local whisper.cpp](docs/local-whisper-cpp.md))
 - Git integration with safe repository operations
 - Quick actions system with context-aware buttons
 - Session export in Markdown, HTML, and JSON formats
-- SQLite persistence with migrations
-- Usage and cost tracking
-- Audit logging and security event tracking
+- SQLite persistence with WAL mode, idempotent migrations, and BEGIN IMMEDIATE transactions
+- Usage and cost tracking with per-request budget reservation
+- Durable audit logging (SQLite) with optional append-only JSONL forensic sink
 - Event bus for decoupled message routing
-- Webhook API server (GitHub HMAC-SHA256, generic Bearer token auth)
+- Webhook API server (GitHub HMAC-SHA256, generic Bearer token auth, localhost-bound by default)
 - Job scheduler with cron expressions and persistent storage
 - Notification service with per-chat rate limiting
+- Graceful shutdown that interrupts in-flight Claude calls cleanly
+- Optional PTB state persistence (directories, session IDs, verbose level) across restarts
 
 - Tunable verbose output showing Claude's tool usage and reasoning in real-time
 - Persistent typing indicator so users always know the bot is working
 - 16 configurable tools with allowlist/disallowlist control (see [docs/tools.md](docs/tools.md))
+
+### Observability
+
+- **Prometheus `/metrics` endpoint** -- served from the webhook API server in the standard Prometheus text format. No external `prometheus_client` dependency.
+- **Correlation IDs** -- every inbound update gets a request ID (and user ID when known) bound to `structlog` via `contextvars`. Every downstream log line (middleware, handlers, storage, Claude SDK) carries the same IDs, so a single grep stitches the full request timeline together.
+- **Hot-path instrumentation** -- received-message counter, rate-limit rejections, DB query duration histograms, active Claude session gauges.
 
 ### Planned Enhancements
 
@@ -252,6 +262,7 @@ ENABLE_QUICK_ACTIONS=true
 ```bash
 # Webhook API Server
 ENABLE_API_SERVER=false          # Enable FastAPI webhook server
+API_SERVER_HOST=127.0.0.1        # Bind host (localhost by default; set 0.0.0.0 only if exposing publicly)
 API_SERVER_PORT=8080             # Server port
 
 # Webhook Authentication
@@ -263,6 +274,10 @@ ENABLE_SCHEDULER=false           # Enable cron job scheduler
 
 # Notifications
 NOTIFICATION_CHAT_IDS=123,456    # Default chat IDs for proactive notifications
+
+# Observability
+AUDIT_LOG_PATH=/var/log/claude-bot/audit.jsonl  # Optional append-only JSONL audit sink
+PTB_PERSISTENCE_PATH=/var/lib/claude-bot/ptb-state.pickle  # Optional PTB state across restarts
 ```
 
 ### Project Threads Mode
@@ -316,16 +331,56 @@ Message [@userinfobot](https://t.me/userinfobot) on Telegram -- it will reply wi
 
 ## Security
 
-This bot implements defense-in-depth security:
+This bot implements defense-in-depth security across the auth, storage, transport, and tooling layers:
 
-- **Access Control** -- Whitelist-based user authentication
-- **Directory Isolation** -- Sandboxing to approved directories
-- **Rate Limiting** -- Request and cost-based limits
-- **Input Validation** -- Injection and path traversal protection
-- **Webhook Authentication** -- GitHub HMAC-SHA256 and Bearer token verification
-- **Audit Logging** -- Complete tracking of all user actions
+### Access & Identity
 
-See [SECURITY.md](SECURITY.md) for details.
+- **Access control** -- whitelist-based user authentication plus optional token-based auth for headless access
+- **HMAC-SHA256 token hashing** -- tokens are stored as HMAC-SHA256 hashes keyed by a server-side secret, verified with `hmac.compare_digest` (constant-time) so neither length-extension attacks nor timing side-channels apply
+- **Persistent token storage** -- token hashes live in SQLite rather than RAM, so revocations and new issuances survive restarts
+- **Pydantic `SecretStr` handling** -- secrets are never accidentally stringified into logs or hash inputs (regression-tested)
+
+### Request Safety
+
+- **Per-user concurrency lock** -- requests from the same user serialize; requests from different users run in parallel. A stuck Claude call for one user never freezes the bot for everyone else
+- **Rate limiting with cost pre-reservation** -- the worst-case per-request cost is reserved up front and reconciled with the actual billed cost after the response, so a single big call cannot silently blow the daily budget
+- **Input validation** -- blocks `..`, `;`, `&&`, `$()`, backticks, and other shell injection patterns
+- **Directory sandboxing** -- approved-directory enforcement with path traversal prevention
+- **Bash tool read-path hardening** -- read-only commands (grep, awk, sed, xxd, etc.) are path-checked against the approved directory; wrapper commands (env, nice, timeout, sudo) are peeled and re-validated; redirects, command substitution, and unquoted globs are rejected
+
+### Storage & Forensics
+
+- **Durable SQLite audit log** -- every auth attempt, command execution, file access, and security violation is persisted to the `audit_log` table (session ID and risk level folded into a namespaced `_meta` dict to prevent key collisions)
+- **Optional append-only JSONL audit sink** -- set `AUDIT_LOG_PATH` to fan out every audit event to a `fsync`'d JSONL file with POSIX 640 permissions; ship it off-host with `logrotate` + a log forwarder for tamper-evident forensic durability
+- **SQLite WAL mode + `BEGIN IMMEDIATE`** -- write transactions take an immediate reserved lock so concurrent UPSERTs (tokens, sessions, audit rows) never race
+- **Idempotent migrations** -- schema and index creation is safe to re-run on existing databases
+- **Secret redaction** -- API keys, tokens, and known secret patterns are scrubbed from both user-facing errors and structured logs before they are written
+
+### Transport & Webhooks
+
+- **API server binds to `127.0.0.1` by default** -- accidental public exposure requires an explicit `API_SERVER_HOST=0.0.0.0`
+- **GitHub HMAC-SHA256 signature verification** for GitHub webhooks; generic Bearer token auth for other providers
+- **Atomic deduplication** -- the `webhook_events` table rejects duplicate deliveries at write time
+- **Webhook-originated Claude runs use a restricted tool set** -- no `WebFetch` or `WebSearch` (eliminates the "attacker planted a payload -> webhook fires -> Claude exfiltrates via search" chain)
+- **Nonce-tagged payload envelopes** -- every webhook-driven prompt wraps untrusted payloads in a fresh nonce-suffixed tag (`<untrusted_payload_$(token_hex)>...`) so a payload cannot close the tag early and inject trusted instructions
+
+### File Handling
+
+- **Magic-byte file validation** -- uploads are identified by their actual file signature (ZIP, PNG, JPEG, PDF, etc.), not by the extension or the filename the client sent, wired into every download call site
+- **Path boundaries for tool writes** -- the `ToolMonitor` validates Claude's file paths against the approved directory before executing Write/Edit/MultiEdit
+
+### Process & Runtime
+
+- **Graceful shutdown** -- SIGTERM / SIGINT fire a global interrupt event; in-flight Claude calls unwind cleanly rather than being force-killed mid-session
+- **User-facing errors are scrubbed** -- stack traces and internal module paths never reach the user; a correlation ID points the operator at the matching log line
+- **CI/CD supply-chain controls** -- CodeQL, pip-audit, and Dependabot run on every PR (see `.github/workflows/`)
+
+### Escape Hatches (Trusted Environments Only)
+
+- `DISABLE_SECURITY_PATTERNS=true` -- relaxes input validation (default `false`)
+- `DISABLE_TOOL_VALIDATION=true` -- skips tool name allowlist checks (default `false`)
+
+See [SECURITY.md](SECURITY.md) for the full threat model and disclosure policy.
 
 ## Development
 
@@ -337,6 +392,18 @@ make format        # Auto-format code
 make run-debug     # Run with debug logging
 make run-watch     # Run with auto-restart on code changes
 ```
+
+### CI / Supply-Chain Checks
+
+Every push and PR runs:
+
+- **Unit tests** with coverage reporting
+- **Lint gate** -- Black, isort, flake8, mypy strict
+- **CodeQL** -- static security analysis for Python
+- **pip-audit** -- dependency vulnerability scan against the locked Poetry environment
+- **Dependabot** -- automated PRs for `pip`, `github-actions`, and `docker` ecosystems
+
+The Dockerfile runs as a non-root user with a read-only root filesystem and a minimal capability set -- see [`Dockerfile`](Dockerfile) and the hardened systemd deployment notes in [`SYSTEMD_SETUP.md`](SYSTEMD_SETUP.md) for reference.
 
 > **Full documentation:** See the [docs index](docs/README.md) for all guides and references.
 
