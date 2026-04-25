@@ -676,21 +676,6 @@ class MessageOrchestrator:
 
         lines = [
             "📊 <b>Status</b>",
-            "",
-            "🤖 <b>Model</b>",
-            f"  Model: <code>{model_display}</code>",
-            f"  Max turns: <code>{max_turns}</code>",
-            f"  Timeout: <code>{timeout_s}s</code>",
-            "",
-            "📂 <b>Session</b>",
-            f"  Directory: <code>{dir_display}</code>",
-            f"  Status: {session_status}",
-            f"  Timeout: <code>{session_timeout_h}h</code>",
-            f"  Verbose: <code>{verbose_display}</code>",
-            "",
-            "⚡️ <b>Rate Limits</b>",
-            f"  <code>{rl_requests}</code> req / <code>{rl_window}s</code>"
-            f"  · burst: <code>{rl_burst}</code>",
             *cost_lines,
             api_limits_str,
         ]
